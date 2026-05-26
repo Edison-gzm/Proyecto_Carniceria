@@ -20,7 +20,7 @@ class LoginWindow(QMainWindow):
         super().__init__()
         self.app = app
         self.setWindowTitle("Carnicería — Iniciar Sesión")
-        self.setFixedSize(420, 500)
+        self.setFixedSize(460, 560)
         self._center_window()
         self._build_ui()
 
