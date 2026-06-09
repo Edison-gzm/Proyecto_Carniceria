@@ -49,8 +49,14 @@ class MainWindow(QMainWindow):
             "Dashboard", "Ventas", "Productos",
             "Clientes", "Caja", "Reportes"
         ]
+        from ui.views.products_view import ProductsView
+
         for name in modules:
-            page = self._placeholder_page(name)
+            if name == "Productos":
+                page = ProductsView(self.app)
+            else:
+                page = self._placeholder_page(name)
+
             self.pages[name] = page
             self.stack.addWidget(page)
 
