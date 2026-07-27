@@ -50,10 +50,16 @@ class MainWindow(QMainWindow):
             "Clientes", "Caja", "Reportes"
         ]
         from ui.views.products_view import ProductsView
+        from ui.views.customers_view import CustomersView
+        from ui.views.sales_view import SalesView
 
         for name in modules:
             if name == "Productos":
                 page = ProductsView(self.app)
+            elif name == "Clientes":
+                page = CustomersView(self.app)
+            elif name == "Ventas":
+                page = SalesView(self.app)
             else:
                 page = self._placeholder_page(name)
 

@@ -26,6 +26,7 @@ class Sale(Base):
 
     status = Column(Enum(SaleStatus), nullable=False, default=SaleStatus.OPEN)
     notes = Column(Text, nullable=True)
+    invoice_pdf_path = Column(String(255), nullable=True)
 
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     closed_at = Column(DateTime, nullable=True)
