@@ -244,6 +244,7 @@ class CustomersView(QWidget):
         layout.addLayout(action_layout)
 
     def _load_customers(self):
+        self.session.expire_all() #evitar problemas con la caché
         service = CustomerService(self.session)
         customers = service.get_all(only_active=False)
         self._populate_table(customers)

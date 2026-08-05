@@ -553,6 +553,7 @@ class SalesView(QWidget):
 
     # ── Lógica ─────────────────────────────────
     def _load_products(self, query=""):
+        self.session.expire_all() #evitar problemas con la caché
         service = ProductService(self.session)
         products = service.search(query) if query else service.get_all(only_active=True)
         self.product_table.setRowCount(len(products))

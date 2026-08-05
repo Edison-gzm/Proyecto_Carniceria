@@ -285,19 +285,32 @@ class ProductsView(QWidget):
         """)
         self.toggle_btn.clicked.connect(self._toggle_product)
 
+        self.delete_btn = QPushButton("🗑 Eliminar")
+        self.delete_btn.setFixedHeight(38)
+        self.delete_btn.setFixedWidth(120)
+        self.delete_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLORS['danger']};
+                color: white;
+                border-radius: 6px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{ background-color: #c0392b; }}
+        """)
+        self.delete_btn.clicked.connect(self._delete_product)
         action_layout.addWidget(self.edit_btn)
         action_layout.addWidget(self.toggle_btn)
+        action_layout.addWidget(self.delete_btn)
         layout.addLayout(action_layout)
 
     def _load_products(self):
+        self.session.expire_all()
         service = ProductService(self.session)
         category_id = self.category_filter.currentData()
-
         if category_id:
             products = service.get_by_category(category_id)
         else:
             products = service.get_all(only_active=False)
-
         self._populate_table(products)
 
     def _search(self, text):
@@ -361,3 +374,26 @@ class ProductsView(QWidget):
         if reply == QMessageBox.Yes:
             service.toggle_active(product_id)
             self._load_products()
+
+    def _delete_product(self):
+        product_id = self._get_selected_product_id()
+        if not product_id:
+            return
+        service = ProductService(self.session)
+        product = service.get_by_id(product_id)
+        reply = QMessageBox.warning(
+            self, "Eliminar producto",
+            f"¿Eliminar permanentemente '{product.name}'?\nEsta acción no se puede deshacer.",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            try:
+                self.session.delete(product)
+                self.session.commit()
+                self._load_products()
+            except Exception as e:
+                self.session.rollback()
+                QMessageBox.critical(
+                    self, "Error",
+                    f"No se pudo eliminar: {e}\n\nSi el producto tiene ventas asociadas, desactívalo en lugar de eliminarlo."
+                )
