@@ -26,7 +26,7 @@ class Product(Base):
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
     category = relationship("Category", back_populates="products")
-    sale_items = relationship("SaleItem", back_populates="product")
+    sale_items = relationship("SaleItem", back_populates="product", passive_deletes=True)
 
     def __repr__(self):
         return f"<Product(name='{self.name}', price={self.price})>"

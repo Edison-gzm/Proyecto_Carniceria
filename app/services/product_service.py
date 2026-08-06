@@ -40,7 +40,21 @@ class ProductService:
             setattr(product, key, value)
         self.session.commit()
         return product
- 
+
+    def delete(self, product_id: int) -> tuple[bool, str]:
+        product = self.session.get(Product, product_id)
+        if not product:
+            return False, "Producto no encontrado."
+
+        # Si el producto ya fue vendido en alguna factura/venta, no se permite borrarlo
+        if product.sale_items:
+            return False, "No se puede eliminar un producto con ventas asociadas. Usa la opción 'Desactivar'."
+
+        self.session.delete(product)
+        self.session.commit()
+        return True, "Producto eliminado exitosamente."
+
+    
     def toggle_active(self, product_id: int) -> bool:
         product = self.session.get(Product, product_id)
         if not product:

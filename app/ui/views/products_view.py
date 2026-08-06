@@ -3,24 +3,49 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QLineEdit, QTableWidget, QTableWidgetItem,
-    QHeaderView, QDialog, QFormLayout, QComboBox,
-    QMessageBox, QFrame
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
+    QLineEdit, QPushButton, QScrollArea, QFrame, 
+    QGridLayout, QDialog, QFormLayout, QComboBox, 
+    QMessageBox, QGraphicsDropShadowEffect
 )
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont
-
+from PySide6.QtGui import QFont, QPixmap, QColor
 from database.session import get_session
 from services.product_service import ProductService, CategoryService
 from database.models.product import UnitType
 from ui.theme import COLORS
 
+BASE_DIR = Path(__file__).parent.parent.parent
+IMAGES_DIR = BASE_DIR / "assets" / "images"
+
+CATEGORY_IMAGES = {
+    "Carne de Vaca": str(IMAGES_DIR / "vaca.jpg"),
+    "Carne de Cerdo": str(IMAGES_DIR / "cerdo.jpg"),
+    "Pollo": str(IMAGES_DIR / "pollo.jpg"),
+    "Embutidos": str(IMAGES_DIR / "embutidos.jpg")
+}
+
+
+def get_square_pixmap(img_path: str, size: int) -> QPixmap:
+    """Recorta la imagen desde el centro a formato 1:1 (cuadrado) y la escala uniformemente."""
+    pixmap = QPixmap(img_path)
+    if pixmap.isNull():
+        return QPixmap()
+    
+    w, h = pixmap.width(), pixmap.height()
+    min_dim = min(w, h)
+    x = (w - min_dim) // 2
+    y = (h - min_dim) // 2
+    
+    # Recorte centrado en un cuadrado perfecto
+    cropped = pixmap.copy(x, y, min_dim, min_dim)
+    return cropped.scaled(size, size, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+
 
 def format_price(value) -> str:
     try:
         return f"${int(float(str(value))):,}".replace(",", ".")
-    except:
+    except Exception:
         return "$0"
 
 
@@ -52,13 +77,11 @@ class ProductDialog(QDialog):
         form = QFormLayout()
         form.setSpacing(12)
 
-        # Nombre
         self.name_input = QLineEdit()
         self.name_input.setPlaceholderText("Ej: Lomo de res")
         self.name_input.setFixedHeight(40)
         form.addRow("Nombre:", self.name_input)
 
-        # Categoría
         self.category_combo = QComboBox()
         self.category_combo.setFixedHeight(40)
         self.category_combo.setStyleSheet(f"""
@@ -81,7 +104,6 @@ class ProductDialog(QDialog):
             self.category_combo.addItem(cat.name, cat.id)
         form.addRow("Categoría:", self.category_combo)
 
-        # Precio
         self.price_input = QLineEdit()
         self.price_input.setPlaceholderText("Ej: 15000")
         self.price_input.setFixedHeight(40)
@@ -90,7 +112,6 @@ class ProductDialog(QDialog):
         layout.addLayout(form)
         layout.addStretch()
 
-        # Botones
         btn_layout = QHBoxLayout()
         cancel_btn = QPushButton("Cancelar")
         cancel_btn.setFixedHeight(40)
@@ -154,246 +175,307 @@ class ProductDialog(QDialog):
 
 
 class ProductsView(QWidget):
-    """Vista principal del módulo de productos."""
+    """Vista de productos en formato catálogo visual con buscador resaltado e imágenes cuadradas."""
 
     def __init__(self, app):
         super().__init__()
         self.app = app
         self.session = app.session
+        self.selected_category_name = "Todas"
         self._build_ui()
         self._load_products()
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(32, 24, 32, 24)
-        layout.setSpacing(16)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(18)
 
-        # Encabezado
-        header = QHBoxLayout()
-        title = QLabel("Productos")
-        title.setFont(QFont("Segoe UI", 22, QFont.Bold))
-        header.addWidget(title)
-        header.addStretch()
+        # 1. Barra superior (Título + Buscador Destacado + Botón Nuevo)
+        top_bar = QHBoxLayout()
+        title = QLabel("Catálogo de Productos")
+        title.setFont(QFont("Segoe UI", 20, QFont.Bold))
+        title.setStyleSheet("color: #111111;")
+        top_bar.addWidget(title)
+
+        top_bar.addStretch()
+
+        # Input de búsqueda diseñado con alto contraste y sombra
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("🔍 BUSCAR PRODUCTO...")
+        self.search_input.setFixedWidth(290)
+        self.search_input.setFixedHeight(46)
+        self.search_input.setFont(QFont("Segoe UI", 11, QFont.Bold))
+        self.search_input.setStyleSheet(f"""
+            QLineEdit {{
+                background-color: #FFFFFF;
+                color: #111111;
+                border: 2px solid {COLORS.get('primary', '#1E3A8A')};
+                border-radius: 10px;
+                padding-left: 14px;
+                padding-right: 14px;
+            }}
+            QLineEdit:focus {{
+                border: 3px solid #2563EB;
+                background-color: #F8FAFC;
+            }}
+        """)
+        
+        # Efecto de sombra real (DropShadow) para destacar el buscador
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(16)
+        shadow.setXOffset(0)
+        shadow.setYOffset(4)
+        shadow.setColor(QColor(0, 0, 0, 45))
+        self.search_input.setGraphicsEffect(shadow)
+
+        self.search_input.textChanged.connect(self._load_products)
+        top_bar.addWidget(self.search_input)
 
         self.new_btn = QPushButton("+ Nuevo Producto")
-        self.new_btn.setFixedHeight(40)
+        self.new_btn.setFixedHeight(42)
+        self.new_btn.setCursor(Qt.PointingHandCursor)
         self.new_btn.clicked.connect(self._open_create)
 
-        # Solo admin puede crear
         from database.models.user import UserRole
-        if self.app.current_user.role != UserRole.ADMIN:
+        if hasattr(self.app, 'current_user') and self.app.current_user.role != UserRole.ADMIN:
             self.new_btn.setVisible(False)
 
-        header.addWidget(self.new_btn)
-        layout.addLayout(header)
+        top_bar.addWidget(self.new_btn)
+        layout.addLayout(top_bar)
 
-        # Búsqueda y filtro
-        filter_layout = QHBoxLayout()
-        self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Buscar producto...")
-        self.search_input.setFixedHeight(38)
-        self.search_input.textChanged.connect(self._search)
-        filter_layout.addWidget(self.search_input)
+        # 2. Selector rápido de categorías (Imágenes en formato cuadrado uniforme)
+        cat_bar = QHBoxLayout()
+        cat_bar.setSpacing(12)
 
-        self.category_filter = QComboBox()
-        self.category_filter.setFixedHeight(38)
-        self.category_filter.setFixedWidth(180)
-        self.category_filter.setStyleSheet(f"""
-            QComboBox {{
+        self.cat_buttons = {}
+        categories = [
+            ("Todas", None),
+            ("Carne de Vaca", CATEGORY_IMAGES.get("Carne de Vaca")),
+            ("Carne de Cerdo", CATEGORY_IMAGES.get("Carne de Cerdo")),
+            ("Pollo", CATEGORY_IMAGES.get("Pollo")),
+            ("Embutidos", CATEGORY_IMAGES.get("Embutidos"))
+        ]
+
+        for name, img_path in categories:
+            btn = QPushButton()
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setToolTip(name)
+            btn.setFixedSize(85, 85)
+
+            btn_layout = QVBoxLayout(btn)
+            btn_layout.setContentsMargins(6, 6, 6, 6)
+            btn_layout.setAlignment(Qt.AlignCenter)
+
+            if img_path:
+                img_label = QLabel()
+                pixmap = get_square_pixmap(img_path, 72)
+                if not pixmap.isNull():
+                    img_label.setPixmap(pixmap)
+                img_label.setAlignment(Qt.AlignCenter)
+                img_label.setStyleSheet("border: None; background: transparent; border-radius: 6px;")
+                btn_layout.addWidget(img_label)
+            else:
+                text_label = QLabel("Todas")
+                text_label.setFont(QFont("Segoe UI", 11, QFont.Bold))
+                text_label.setStyleSheet("color: #111111; background: transparent;")
+                text_label.setAlignment(Qt.AlignCenter)
+                btn_layout.addWidget(text_label)
+
+            btn.clicked.connect(lambda _, c=name: self.filter_by_category(c))
+            self.cat_buttons[name] = btn
+            cat_bar.addWidget(btn)
+
+        cat_bar.addStretch()
+        layout.addLayout(cat_bar)
+
+        # 3. Área desplazable con cuadrícula de productos
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+
+        self.products_container = QWidget()
+        self.products_grid = QGridLayout(self.products_container)
+        self.products_grid.setSpacing(16)
+        self.products_grid.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+
+        scroll.setWidget(self.products_container)
+        layout.addWidget(scroll)
+
+        self._update_cat_buttons_style()
+
+    def filter_by_category(self, category_name):
+        self.selected_category_name = category_name
+        self._update_cat_buttons_style()
+        self._load_products()
+
+    def _update_cat_buttons_style(self):
+        for name, btn in self.cat_buttons.items():
+            if name == self.selected_category_name:
+                btn.setStyleSheet(f"""
+                    QPushButton {{
+                        background-color: {COLORS['surface_light']};
+                        border: 3px solid {COLORS['primary']};
+                        border-radius: 12px;
+                    }}
+                """)
+            else:
+                btn.setStyleSheet(f"""
+                    QPushButton {{
+                        background-color: {COLORS['surface']};
+                        border: 1px solid {COLORS['border']};
+                        border-radius: 12px;
+                    }}
+                    QPushButton:hover {{
+                        background-color: {COLORS['surface_light']};
+                    }}
+                """)
+
+    def _load_products(self):
+        while self.products_grid.count():
+            item = self.products_grid.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        self.session.expire_all()
+        service = ProductService(self.session)
+        products = service.get_all(only_active=True)
+
+        search_text = self.search_input.text().lower().replace("🔍", "").strip()
+
+        filtered = []
+        for p in products:
+            cat_name = p.category.name if p.category else "Sin Categoría"
+
+            matches_cat = (self.selected_category_name == "Todas" or cat_name.lower() == self.selected_category_name.lower())
+            matches_search = (search_text in p.name.lower())
+
+            if matches_cat and matches_search:
+                filtered.append((p, cat_name))
+
+        if not filtered:
+            empty_lbl = QLabel("No se encontraron productos.")
+            empty_lbl.setFont(QFont("Segoe UI", 13))
+            empty_lbl.setStyleSheet(f"color: {COLORS['text_secondary']}; margin-top: 30px;")
+            self.products_grid.addWidget(empty_lbl, 0, 0)
+            return
+
+        cols = 4
+        for i, (product, cat_name) in enumerate(filtered):
+            card = self._create_product_card(product, cat_name)
+            row = i // cols
+            col = i % cols
+            self.products_grid.addWidget(card, row, col)
+
+    def _create_product_card(self, product, category_name):
+        card = QFrame()
+        card.setFixedSize(220, 260)
+        card.setStyleSheet(f"""
+            QFrame {{
                 background-color: {COLORS['surface']};
-                color: {COLORS['text_primary']};
                 border: 1px solid {COLORS['border']};
-                border-radius: 6px;
-                padding: 6px;
+                border-radius: 12px;
             }}
-            QComboBox QAbstractItemView {{
-                background-color: {COLORS['surface']};
-                color: {COLORS['text_primary']};
-                selection-background-color: {COLORS['primary']};
+            QFrame:hover {{
+                border: 2px solid {COLORS['primary']};
             }}
         """)
-        self.category_filter.addItem("Todas las categorías", None)
-        cat_service = CategoryService(self.session)
-        for cat in cat_service.get_all():
-            self.category_filter.addItem(cat.name, cat.id)
-        self.category_filter.currentIndexChanged.connect(self._load_products)
-        filter_layout.addWidget(self.category_filter)
-        layout.addLayout(filter_layout)
 
-        # Tabla
-        self.table = QTableWidget()
-        self.table.setColumnCount(5)
-        self.table.setHorizontalHeaderLabels(["ID", "Nombre", "Categoría", "Precio/kg", "Estado"])
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-        self.table.setColumnWidth(0, 50)
-        self.table.setColumnWidth(3, 120)
-        self.table.setColumnWidth(4, 90)
-        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.table.setAlternatingRowColors(True)
-        self.table.verticalHeader().setVisible(False)
-        self.table.setStyleSheet(f"""
-            QTableWidget {{
-                background-color: {COLORS['surface']};
-                border: 1px solid {COLORS['border']};
-                border-radius: 8px;
-                gridline-color: {COLORS['border']};
-            }}
-            QTableWidget::item {{
-                padding: 8px;
-                color: {COLORS['text_primary']};
-            }}
-            QTableWidget::item:selected {{
-                background-color: {COLORS['primary']};
-            }}
-            QHeaderView::section {{
-                background-color: {COLORS['surface_light']};
-                color: {COLORS['text_secondary']};
-                padding: 10px;
-                border: none;
-                font-weight: bold;
-            }}
-            QTableWidget::item:alternate {{
-                background-color: {COLORS['surface_light']};
-            }}
-        """)
-        layout.addWidget(self.table)
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setAlignment(Qt.AlignCenter)
 
-        # Botones de acción
-        action_layout = QHBoxLayout()
-        action_layout.addStretch()
+        # Imagen recortada perfectamente en cuadrado
+        img_path = CATEGORY_IMAGES.get(category_name, str(IMAGES_DIR / "vaca.jpg"))
+        img_label = QLabel()
+        pixmap = get_square_pixmap(img_path, 80)
+        if not pixmap.isNull():
+            img_label.setPixmap(pixmap)
+        img_label.setAlignment(Qt.AlignCenter)
+        img_label.setStyleSheet("border: none;")
+        layout.addWidget(img_label)
 
-        self.edit_btn = QPushButton("✏ Editar")
-        self.edit_btn.setFixedHeight(38)
-        self.edit_btn.setFixedWidth(110)
-        self.edit_btn.clicked.connect(self._open_edit)
+        # Nombre
+        name_label = QLabel(product.name)
+        name_label.setFont(QFont("Segoe UI", 11, QFont.Bold))
+        name_label.setStyleSheet("color: #111111; border: none;")
+        name_label.setWordWrap(True)
+        name_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(name_label)
 
-        self.toggle_btn = QPushButton("⏸ Desactivar")
-        self.toggle_btn.setFixedHeight(38)
-        self.toggle_btn.setFixedWidth(130)
-        self.toggle_btn.setStyleSheet(f"""
+        # Precio Gigante
+        price_label = QLabel(format_price(product.price))
+        price_label.setFont(QFont("Segoe UI", 18, QFont.Bold))
+        price_label.setStyleSheet(f"color: {COLORS['success']}; border: none;")
+        price_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(price_label)
+
+        # Botones Editar / Eliminar
+        btn_box = QHBoxLayout()
+        btn_box.setSpacing(6)
+
+        edit_btn = QPushButton("✏ Editar")
+        edit_btn.setFixedHeight(28)
+        edit_btn.setFont(QFont("Segoe UI", 9))
+        edit_btn.setCursor(Qt.PointingHandCursor)
+        edit_btn.setStyleSheet(f"""
             QPushButton {{
-                background-color: {COLORS['warning']};
-                color: white;
-                border-radius: 6px;
-                font-weight: bold;
+                background-color: {COLORS['surface_light']};
+                color: {COLORS['text_primary']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 4px;
             }}
-            QPushButton:hover {{
-                background-color: #d68910;
-            }}
+            QPushButton:hover {{ background-color: {COLORS['border']}; }}
         """)
-        self.toggle_btn.clicked.connect(self._toggle_product)
+        edit_btn.clicked.connect(lambda _, p=product: self._open_edit(p))
+        btn_box.addWidget(edit_btn)
 
-        self.delete_btn = QPushButton("🗑 Eliminar")
-        self.delete_btn.setFixedHeight(38)
-        self.delete_btn.setFixedWidth(120)
-        self.delete_btn.setStyleSheet(f"""
+        del_btn = QPushButton("🗑")
+        del_btn.setFixedHeight(28)
+        del_btn.setFixedWidth(32)
+        del_btn.setCursor(Qt.PointingHandCursor)
+        del_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: {COLORS['danger']};
                 color: white;
-                border-radius: 6px;
+                border: none;
+                border-radius: 4px;
                 font-weight: bold;
             }}
             QPushButton:hover {{ background-color: #c0392b; }}
         """)
-        self.delete_btn.clicked.connect(self._delete_product)
-        action_layout.addWidget(self.edit_btn)
-        action_layout.addWidget(self.toggle_btn)
-        action_layout.addWidget(self.delete_btn)
-        layout.addLayout(action_layout)
+        del_btn.clicked.connect(lambda _, p=product: self._delete_product(p))
+        btn_box.addWidget(del_btn)
 
-    def _load_products(self):
-        self.session.expire_all()
-        service = ProductService(self.session)
-        category_id = self.category_filter.currentData()
-        if category_id:
-            products = service.get_by_category(category_id)
-        else:
-            products = service.get_all(only_active=False)
-        self._populate_table(products)
+        from database.models.user import UserRole
+        if hasattr(self.app, 'current_user') and self.app.current_user.role != UserRole.ADMIN:
+            edit_btn.setVisible(False)
+            del_btn.setVisible(False)
 
-    def _search(self, text):
-        if not text.strip():
-            self._load_products()
-            return
-        service = ProductService(self.session)
-        products = service.search(text)
-        self._populate_table(products)
-
-    def _populate_table(self, products):
-        self.table.setRowCount(len(products))
-        for row, p in enumerate(products):
-            self.table.setItem(row, 0, QTableWidgetItem(str(p.id)))
-            self.table.setItem(row, 1, QTableWidgetItem(p.name))
-            self.table.setItem(row, 2, QTableWidgetItem(p.category.name if p.category else ""))
-            self.table.setItem(row, 3, QTableWidgetItem(format_price(p.price)))
-
-            estado = QTableWidgetItem("Activo" if p.is_active else "Inactivo")
-            estado.setForeground(
-                Qt.green if p.is_active else Qt.red
-            )
-            self.table.setItem(row, 4, estado)
-            self.table.item(row, 0).setData(Qt.UserRole, p.id)
-
-    def _get_selected_product_id(self):
-        row = self.table.currentRow()
-        if row < 0:
-            QMessageBox.warning(self, "Aviso", "Selecciona un producto primero.")
-            return None
-        return self.table.item(row, 0).data(Qt.UserRole)
+        layout.addLayout(btn_box)
+        return card
 
     def _open_create(self):
         dialog = ProductDialog(self, self.session)
         if dialog.exec():
             self._load_products()
 
-    def _open_edit(self):
-        product_id = self._get_selected_product_id()
-        if not product_id:
-            return
-        service = ProductService(self.session)
-        product = service.get_by_id(product_id)
+    def _open_edit(self, product):
         dialog = ProductDialog(self, self.session, product)
         if dialog.exec():
             self._load_products()
 
-    def _toggle_product(self):
-        product_id = self._get_selected_product_id()
-        if not product_id:
-            return
-        service = ProductService(self.session)
-        product = service.get_by_id(product_id)
-        action = "desactivar" if product.is_active else "activar"
-
-        reply = QMessageBox.question(
-            self, "Confirmar",
-            f"¿Seguro que quieres {action} '{product.name}'?",
-            QMessageBox.Yes | QMessageBox.No
-        )
-        if reply == QMessageBox.Yes:
-            service.toggle_active(product_id)
-            self._load_products()
-
-    def _delete_product(self):
-        product_id = self._get_selected_product_id()
-        if not product_id:
-            return
-        service = ProductService(self.session)
-        product = service.get_by_id(product_id)
+    def _delete_product(self, product):
         reply = QMessageBox.warning(
             self, "Eliminar producto",
-            f"¿Eliminar permanentemente '{product.name}'?\nEsta acción no se puede deshacer.",
+            f"¿Eliminar '{product.name}' de la lista?",
             QMessageBox.Yes | QMessageBox.No
         )
         if reply == QMessageBox.Yes:
-            try:
-                self.session.delete(product)
-                self.session.commit()
-                self._load_products()
-            except Exception as e:
-                self.session.rollback()
-                QMessageBox.critical(
-                    self, "Error",
-                    f"No se pudo eliminar: {e}\n\nSi el producto tiene ventas asociadas, desactívalo en lugar de eliminarlo."
-                )
+            service = ProductService(self.session)
+            exito, mensaje = service.delete(product.id)
+            if exito:
+                QMessageBox.information(self, "Éxito", "Producto eliminado correctamente.")
+            else:
+                service.toggle_active(product.id)
+                QMessageBox.information(self, "Producto retirado", f"'{product.name}' se ha retirado de la lista.")
+            self._load_products()
