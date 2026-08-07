@@ -9,7 +9,13 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
+
 from ui.theme import COLORS
+from ui.views.dashboard_view import DashboardView
+from ui.views.products_view import ProductsView
+from ui.views.customers_view import CustomersView
+from ui.views.sales_view import SalesView
+from ui.views.cash_register_view import CashRegisterView  # 👈 Importamos la vista de Caja
 
 
 class MainWindow(QMainWindow):
@@ -50,11 +56,6 @@ class MainWindow(QMainWindow):
             "INICIO", "Ventas", "Productos",
             "Clientes", "Caja", "Reportes"
         ]
-        
-        from ui.views.dashboard_view import DashboardView
-        from ui.views.products_view import ProductsView
-        from ui.views.customers_view import CustomersView
-        from ui.views.sales_view import SalesView
 
         for name in modules:
             if name == "INICIO":
@@ -65,6 +66,12 @@ class MainWindow(QMainWindow):
                 page = CustomersView(self.app)
             elif name == "Ventas":
                 page = SalesView(self.app)
+            elif name == "Caja":
+                # 👈 AQUÍ CONECTAMOS LA VISTA DE CAJA
+                page = CashRegisterView(
+                    session=self.app.session,
+                    current_user_id=self.app.current_user.id
+                )
             else:
                 page = self._placeholder_page(name)
 

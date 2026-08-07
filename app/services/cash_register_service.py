@@ -54,3 +54,10 @@ class CashRegisterService:
             .limit(limit)
             .all()
         )
+    def get_current_sales_total(self, register_id: int) -> Decimal:
+        """Obtiene el total acumulado de ventas de la caja actual sin cerrarla."""
+        sales = self.session.query(Sale).filter(
+            Sale.cash_register_id == register_id,
+            Sale.status == SaleStatus.CLOSED
+        ).all()
+        return Decimal(str(sum(s.total for s in sales)))    
