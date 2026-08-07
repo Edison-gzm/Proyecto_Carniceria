@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QLabel, QLineEdit, QPushButton, QFrame,
     QMessageBox, QGraphicsDropShadowEffect
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QSettings
 from PySide6.QtGui import QFont, QColor
 
 from database.session import get_session
@@ -19,10 +19,14 @@ class LoginWindow(QMainWindow):
     def __init__(self, app):
         super().__init__()
         self.app = app
+        self.settings = QSettings("CarniceriaApp", "LoginSession")
+        
         self.setWindowTitle("Carnicería — Iniciar Sesión")
         self.setFixedSize(400, 540)
         self._center_window()
         self._build_ui()
+        self._setup_enter_navigation()
+        self._load_last_username()
 
     def _center_window(self):
         screen = self.screen().availableGeometry()
@@ -57,7 +61,7 @@ class LoginWindow(QMainWindow):
 
         main_layout.addSpacing(15)
 
-        # Tarjeta del Formulario con Sombra
+        # Tarjeta del Formulario
         card = QFrame()
         card.setStyleSheet(f"""
             QFrame {{
@@ -67,7 +71,6 @@ class LoginWindow(QMainWindow):
             }}
         """)
         
-        # Efecto de sombra suave para la tarjeta
         shadow = QGraphicsDropShadowEffect(self)
         shadow.setBlurRadius(20)
         shadow.setXOffset(0)
@@ -100,10 +103,8 @@ class LoginWindow(QMainWindow):
         self.password_input.setPlaceholderText("Ingresa tu contraseña")
         self.password_input.setEchoMode(QLineEdit.Password)
         self.password_input.setFixedHeight(40)
-        self.password_input.returnPressed.connect(self._handle_login)
         card_layout.addWidget(self.password_input)
 
-        # Espaciado extra para bajar el botón
         card_layout.addSpacing(18)
 
         # Botón de Iniciar Sesión
@@ -123,6 +124,20 @@ class LoginWindow(QMainWindow):
         main_layout.addSpacing(10)
         main_layout.addWidget(version)
 
+    def _setup_enter_navigation(self):
+        """Conecta la tecla Enter de cada casilla."""
+        self.username_input.returnPressed.connect(self.password_input.setFocus)
+        self.password_input.returnPressed.connect(self._handle_login)
+
+    def _load_last_username(self):
+        """Carga el último usuario recordado."""
+        last_user = self.settings.value("last_username", "", type=str)
+        if last_user:
+            self.username_input.setText(last_user)
+            self.password_input.setFocus()
+        else:
+            self.username_input.setFocus()
+
     def _handle_login(self):
         username = self.username_input.text().strip()
         password = self.password_input.text().strip()
@@ -140,6 +155,7 @@ class LoginWindow(QMainWindow):
             user = auth.login(username, password)
 
             if user:
+                self.settings.setValue("last_username", username)
                 self.app.session = session
                 self.app.current_user = user
                 self._open_main_window()
