@@ -1,212 +1,342 @@
+from datetime import datetime
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, 
-    QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, 
-    QMessageBox, QFrame, QTextEdit, QDoubleSpinBox, QGroupBox, QGridLayout
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
+    QLineEdit, QPushButton, QTableWidget, QTableWidgetItem,
+    QHeaderView, QMessageBox, QGroupBox
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
-from decimal import Decimal
+from sqlalchemy import func
 
-from database.models.cash_register import CashRegisterStatus
+from ui.theme import COLORS
+from database.models import CashRegister, Sale
+
+
+def _get_model_field(obj, *field_names, default=None):
+    """Obtiene el valor del primer campo disponible en el objeto."""
+    for field in field_names:
+        if hasattr(obj, field) and getattr(obj, field) is not None:
+            return getattr(obj, field)
+    return default
+
+
+def _set_model_field(obj, field_names, value):
+    """Asigna un valor al primer campo de la lista que exista en el objeto."""
+    for field in field_names:
+        if hasattr(obj, field):
+            setattr(obj, field, value)
+            return True
+    return False
 
 
 class CashRegisterView(QWidget):
-    def __init__(self, session, current_user_id: int):
+    def __init__(self, session, current_user_id):
         super().__init__()
         self.session = session
         self.current_user_id = current_user_id
-        
-        # Importamos diferido para evitar ciclos de importación si fuera necesario
-        from services.cash_register_service import CashRegisterService
-        self.service = CashRegisterService(self.session)
+        self.active_register = None
 
-        self.current_register = None
-        self.init_ui()
-        self.refresh_view()
+        self._build_ui()
+        self.refresh_data()
 
-    def init_ui(self):
-        main_layout = QVBoxLayout(self)
-        main_layout.setSpacing(15)
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(15)
 
-        # 1. Título
+        # Título principal
         title = QLabel("Gestión y Arqueo de Caja")
-        title.setFont(QFont("Arial", 16, QFont.Weight.Bold))
-        main_layout.addWidget(title)
+        title.setFont(QFont("Segoe UI", 18, QFont.Bold))
+        title.setStyleSheet(f"color: {COLORS['text_primary']};")
+        layout.addWidget(title)
 
-        # 2. Panel Superior Dinámico (Apertura o Cierre)
-        self.status_container = QWidget()
-        self.status_layout = QVBoxLayout(self.status_container)
-        self.status_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.addWidget(self.status_container)
-
-        # 3. Sección de Historial
-        history_group = QGroupBox("Historial de Cajas")
-        history_layout = QVBoxLayout(history_group)
-
-        self.history_table = QTableWidget()
-        self.history_table.setColumnCount(8)
-        self.history_table.setHorizontalHeaderLabels([
-            "ID", "Usuario", "Apertura", "Cierre", 
-            "M. Inicial", "Ventas", "Cierre Real", "Diferencia"
-        ])
-        self.history_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        history_layout.addWidget(self.history_table)
-
-        main_layout.addWidget(history_group)
-
-    def refresh_view(self):
-        """Refresca el estado actual de la caja y la tabla de historial."""
-        self.current_register = self.service.get_open()
+        # Panel Estado de Caja
+        self.box_status = QGroupBox("Caja Activa (Turno en curso)")
+        self.box_status.setStyleSheet(f"""
+            QGroupBox {{
+                font-size: 13px;
+                font-weight: bold;
+                color: {COLORS['text_primary']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 8px;
+                margin-top: 10px;
+                padding-top: 15px;
+                background-color: {COLORS['surface']};
+            }}
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px;
+            }}
+        """)
         
-        # Limpiar el panel superior dinámico
-        for i in reversed(range(self.status_layout.count())):
-            widget = self.status_layout.itemAt(i).widget()
-            if widget:
-                widget.setParent(None)
+        status_layout = QVBoxLayout(self.box_status)
+        status_layout.setSpacing(12)
 
-        if self.current_register:
-            self._build_open_register_ui()
+        # Información de Apertura
+        self.lbl_info = QLabel("Estado: Cargando...")
+        self.lbl_info.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 13px;")
+        status_layout.addWidget(self.lbl_info)
+
+        # Totales
+        self.lbl_totals = QLabel("Monto Inicial: $0.00  |  Ventas Turno: $0.00  |  Total Esperado: $0.00")
+        self.lbl_totals.setFont(QFont("Segoe UI", 11, QFont.Bold))
+        self.lbl_totals.setStyleSheet(f"color: {COLORS['primary']};")
+        status_layout.addWidget(self.lbl_totals)
+
+        # Entrada Monto Físico
+        form_layout = QHBoxLayout()
+        form_layout.addWidget(QLabel("Monto Físico Contado en Caja ($):"))
+        self.input_physical_amount = QLineEdit()
+        self.input_physical_amount.setPlaceholderText("0.00")
+        self.input_physical_amount.setStyleSheet(f"""
+            QLineEdit {{
+                border: 1px solid {COLORS['border']};
+                border-radius: 4px;
+                padding: 6px 10px;
+                font-size: 13px;
+                background-color: {COLORS['surface_light']};
+            }}
+        """)
+        form_layout.addWidget(self.input_physical_amount)
+        status_layout.addLayout(form_layout)
+
+        # Observaciones
+        obs_layout = QHBoxLayout()
+        obs_layout.addWidget(QLabel("Notas / Observaciones:"))
+        self.input_notes = QLineEdit()
+        self.input_notes.setPlaceholderText("Ej. Arqueo correcto / Retiro de dinero...")
+        self.input_notes.setStyleSheet(f"""
+            QLineEdit {{
+                border: 1px solid {COLORS['border']};
+                border-radius: 4px;
+                padding: 6px 10px;
+                font-size: 13px;
+                background-color: {COLORS['surface_light']};
+            }}
+        """)
+        obs_layout.addWidget(self.input_notes)
+        status_layout.addLayout(obs_layout)
+
+        # Botón Acción
+        self.btn_action = QPushButton("Realizar Arqueo y Cerrar Caja")
+        self.btn_action.setFixedHeight(40)
+        self.btn_action.setCursor(Qt.PointingHandCursor)
+        self.btn_action.setFont(QFont("Segoe UI", 11, QFont.Bold))
+        self.btn_action.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLORS['danger']};
+                color: white;
+                border: none;
+                border-radius: 6px;
+            }}
+            QPushButton:hover {{
+                background-color: #c82333;
+            }}
+        """)
+        self.btn_action.clicked.connect(self._handle_cash_action)
+        status_layout.addWidget(self.btn_action)
+
+        layout.addWidget(self.box_status)
+
+        # --- SECCIÓN: VENTAS DEL TURNO ACTIVO ---
+        sales_group = QGroupBox("Ventas del Turno / Día")
+        sales_group.setStyleSheet(self.box_status.styleSheet())
+        
+        sales_layout = QVBoxLayout(sales_group)
+
+        self.table_sales = QTableWidget()
+        self.table_sales.setColumnCount(5)
+        self.table_sales.setHorizontalHeaderLabels(["ID Venta", "Hora", "Cliente", "Método Pago", "Total"])
+        self.table_sales.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.table_sales.setAlternatingRowColors(True)
+        self.table_sales.setStyleSheet(f"""
+            QTableWidget {{
+                background-color: {COLORS['surface']};
+                gridline-color: {COLORS['border']};
+                font-size: 12px;
+            }}
+            QHeaderView::section {{
+                background-color: {COLORS['surface_light']};
+                color: {COLORS['text_primary']};
+                font-weight: bold;
+                border: 1px solid {COLORS['border']};
+                padding: 4px;
+            }}
+        """)
+        sales_layout.addWidget(self.table_sales)
+        layout.addWidget(sales_group)
+
+    def refresh_data(self):
+        """Refresca el estado de la caja y carga las ventas del turno."""
+        # 1. Buscar si hay una caja abierta
+        self.active_register = (
+            self.session.query(CashRegister)
+            .filter(CashRegister.status == "OPEN")
+            .order_by(CashRegister.id.desc())
+            .first()
+        )
+
+        if not self.active_register:
+            self._ui_state_no_register()
+            return
+
+        # 2. Obtener fecha de apertura y monto inicial con soporte de múltiples nombres de columna
+        opened_at = _get_model_field(self.active_register, "opened_at", "opening_date", "created_at")
+        initial_amount = _get_model_field(self.active_register, "opening_amount", "initial_amount", "initial_balance", default=0.0)
+
+        # 3. Consultar las ventas creadas desde la fecha de apertura
+        sales_query = self.session.query(Sale)
+        if opened_at:
+            sales_query = sales_query.filter(Sale.created_at >= opened_at)
+
+        if hasattr(Sale, 'status'):
+            sales_query = sales_query.filter(Sale.status == 'COMPLETED')
+
+        total_sales = sales_query.with_entities(func.sum(Sale.total)).scalar() or 0.0
+        expected_total = float(initial_amount) + float(total_sales)
+
+        # 4. Actualizar etiquetas
+        opened_str = opened_at.strftime("%d/%m/%Y %H:%M:%S") if opened_at else "N/A"
+        self.lbl_info.setText(f"Abierta por: Usuario #{self.active_register.user_id}  |  Hora Apertura (Local PC): {opened_str}")
+        self.lbl_totals.setText(
+            f"Monto Inicial: ${initial_amount:,.2f}  |  "
+            f"Ventas Turno: ${total_sales:,.2f}  |  "
+            f"Total Esperado: ${expected_total:,.2f}"
+        )
+
+        self.btn_action.setText("Realizar Arqueo y Cerrar Caja")
+        self.btn_action.setStyleSheet(f"background-color: {COLORS['danger']}; color: white; border-radius: 6px;")
+        self.input_physical_amount.setEnabled(True)
+        self.input_notes.setEnabled(True)
+
+        # 5. Cargar tabla de ventas del turno
+        self._load_turn_sales(sales_query.all())
+
+    def _ui_state_no_register(self):
+        """Estado cuando la caja está cerrada."""
+        self.lbl_info.setText("Caja Actualmente CERRADA. Inicie un nuevo turno.")
+        self.lbl_totals.setText("Monto Inicial: $0.00  |  Ventas Turno: $0.00  |  Total Esperado: $0.00")
+        self.btn_action.setText("🔓 Abrir Nueva Caja / Turno")
+        self.btn_action.setStyleSheet(f"background-color: {COLORS['success']}; color: white; border-radius: 6px;")
+        self.input_physical_amount.setEnabled(False)
+        self.input_notes.setEnabled(False)
+        self.table_sales.setRowCount(0)
+
+    def _load_turn_sales(self, sales_list):
+        """Carga el detalle de las ventas en la tabla."""
+        self.table_sales.setRowCount(0)
+
+        for row, sale in enumerate(sales_list):
+            self.table_sales.insertRow(row)
+
+            # ID Venta
+            item_id = QTableWidgetItem(str(sale.id))
+            item_id.setTextAlignment(Qt.AlignCenter)
+            self.table_sales.setItem(row, 0, item_id)
+
+            # Hora local de la venta
+            created = getattr(sale, 'created_at', None)
+            hora_str = created.strftime("%H:%M:%S") if created else "N/A"
+            item_hora = QTableWidgetItem(hora_str)
+            item_hora.setTextAlignment(Qt.AlignCenter)
+            self.table_sales.setItem(row, 1, item_hora)
+
+            # Cliente
+            cliente_nombre = "Cliente General"
+            if hasattr(sale, 'customer') and sale.customer:
+                cliente_nombre = getattr(sale.customer, 'full_name', getattr(sale.customer, 'name', 'Cliente'))
+            item_cliente = QTableWidgetItem(cliente_nombre)
+            self.table_sales.setItem(row, 2, item_cliente)
+
+            # Método de Pago
+            metodo = getattr(sale, 'payment_method', 'Efectivo')
+            item_pago = QTableWidgetItem(str(metodo))
+            item_pago.setTextAlignment(Qt.AlignCenter)
+            self.table_sales.setItem(row, 3, item_pago)
+
+            # Total
+            total_val = getattr(sale, 'total', 0.0)
+            item_total = QTableWidgetItem(f"${total_val:,.2f}")
+            item_total.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            self.table_sales.setItem(row, 4, item_total)
+
+    def _handle_cash_action(self):
+        """Maneja el clic del botón (Abrir o Cerrar caja)."""
+        if not self.active_register:
+            self._open_register()
         else:
-            self._build_closed_register_ui()
+            self._close_register()
 
-        self.load_history()
+    def _open_register(self):
+        """Abre un nuevo turno registrando la hora exacta de la computadora."""
+        now_local = datetime.now()  # 👈 Toma la hora local del PC
 
-    def _build_closed_register_ui(self):
-        """Interfaz cuando la caja está CERRADA (Formulario de Apertura)."""
-        box = QGroupBox("Apertura de Caja")
-        layout = QGridLayout(box)
+        # Crear instancia de caja pasando las columnas dinámicamente según la DB
+        cols = [c.key for c in CashRegister.__table__.columns]
+        
+        kwargs = {
+            "user_id": self.current_user_id,
+            "status": "OPEN"
+        }
 
-        status_lbl = QLabel("ESTADO: CAJA CERRADA")
-        status_lbl.setStyleSheet("color: #d9534f; font-weight: bold; font-size: 14px;")
-        layout.addWidget(status_lbl, 0, 0, 1, 2)
+        # Asignar fecha de apertura
+        if "opened_at" in cols:
+            kwargs["opened_at"] = now_local
+        elif "opening_date" in cols:
+            kwargs["opening_date"] = now_local
 
-        layout.addWidget(QLabel("Monto Inicial en Efectivo ($):"), 1, 0)
-        self.opening_amount_spin = QDoubleSpinBox()
-        self.opening_amount_spin.setRange(0, 10000000)
-        self.opening_amount_spin.setDecimals(2)
-        self.opening_amount_spin.setPrefix("$ ")
-        layout.addWidget(self.opening_amount_spin, 1, 1)
+        # Asignar monto inicial (0.0 por defecto)
+        for col_name in ["opening_amount", "initial_amount", "initial_balance", "opening_balance"]:
+            if col_name in cols:
+                kwargs[col_name] = 0.0
+                break
 
-        btn_open = QPushButton("Abrir Caja")
-        btn_open.setStyleSheet("background-color: #28a745; color: white; font-weight: bold; padding: 8px;")
-        btn_open.clicked.connect(self.handle_open_register)
-        layout.addWidget(btn_open, 2, 0, 1, 2)
+        new_reg = CashRegister(**kwargs)
+        self.session.add(new_reg)
+        self.session.commit()
 
-        self.status_layout.addWidget(box)
+        QMessageBox.information(self, "Caja Abierta", f"Se ha abierto la caja con éxito a las {now_local.strftime('%H:%M:%S')}.")
+        self.refresh_data()
 
-    def _build_open_register_ui(self):
-        """Interfaz cuando la caja está ABIERTA (Resumen + Arqueo)."""
-        box = QGroupBox("Caja Activa (Turno en curso)")
-        layout = QGridLayout(box)
+    def _close_register(self):
+        """Cierra el turno actual de caja."""
+        physical_text = self.input_physical_amount.text().strip()
+        if not physical_text:
+            QMessageBox.warning(self, "Atención", "Por favor ingrese el monto físico contado en caja.")
+            return
 
-        # Calcular totales actuales
-        current_sales = self.service.get_current_sales_total(self.current_register.id)
-        opening = self.current_register.opening_amount
-        expected_total = opening + current_sales
-
-        # Info general
-        lbl_info = QLabel(
-            f"<b>Abierta por:</b> ID Usuario {self.current_register.user_id} | "
-            f"<b>Fecha:</b> {self.current_register.opened_at.strftime('%Y-%m-%d %H:%M')}"
-        )
-        layout.addWidget(lbl_info, 0, 0, 1, 2)
-
-        # Resumen dinámico
-        summary_text = (
-            f"<b>Monto Inicial:</b> ${opening:,.2f} | "
-            f"<b>Ventas Turno:</b> ${current_sales:,.2f} | "
-            f"<b>Total Esperado en Caja:</b> <span style='color: #0275d8;'>${expected_total:,.2f}</span>"
-        )
-        lbl_summary = QLabel(summary_text)
-        lbl_summary.setStyleSheet("font-size: 13px; margin: 10px 0;")
-        layout.addWidget(lbl_summary, 1, 0, 1, 2)
-
-        # Cierre y Arqueo
-        layout.addWidget(QLabel("Monto Físico Contado en Caja ($):"), 2, 0)
-        self.closing_amount_spin = QDoubleSpinBox()
-        self.closing_amount_spin.setRange(0, 10000000)
-        self.closing_amount_spin.setDecimals(2)
-        self.closing_amount_spin.setPrefix("$ ")
-        self.closing_amount_spin.setValue(float(expected_total))
-        layout.addWidget(self.closing_amount_spin, 2, 1)
-
-        layout.addWidget(QLabel("Notas / Observaciones:"), 3, 0)
-        self.notes_edit = QTextEdit()
-        self.notes_edit.setMaximumHeight(60)
-        self.notes_edit.setPlaceholderText("Ej. Se realizó retiro de $50.000 para pago de flete...")
-        layout.addWidget(self.notes_edit, 3, 1)
-
-        btn_close = QPushButton("Realizar Arqueo y Cerrar Caja")
-        btn_close.setStyleSheet("background-color: #dc3545; color: white; font-weight: bold; padding: 8px;")
-        btn_close.clicked.connect(self.handle_close_register)
-        layout.addWidget(btn_close, 4, 0, 1, 2)
-
-        self.status_layout.addWidget(box)
-
-    def handle_open_register(self):
-        monto = self.opening_amount_spin.value()
         try:
-            self.service.open_register(user_id=self.current_user_id, opening_amount=monto)
-            QMessageBox.information(self, "Éxito", "Caja abierta correctamente.")
-            self.refresh_view()
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"No se pudo abrir la caja: {str(e)}")
+            physical_amount = float(physical_text)
+        except ValueError:
+            QMessageBox.warning(self, "Atención", "El monto físico debe ser un número válido.")
+            return
 
-    def handle_close_register(self):
-        monto_real = self.closing_amount_spin.value()
-        notas = self.notes_edit.toPlainText()
-
-        confirm = QMessageBox.question(
-            self, "Confirmar Cierre", 
-            "¿Estás seguro de que deseas cerrar la caja actual?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        # Confirmación con botones explicítos Yes/No
+        reply = QMessageBox.question(
+            self,
+            "Confirmar Cierre de Caja",
+            "¿Está seguro de que desea realizar el arqueo y cerrar el turno?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
         )
 
-        if confirm == QMessageBox.StandardButton.Yes:
-            try:
-                closed = self.service.close_register(
-                    register_id=self.current_register.id,
-                    closing_amount=monto_real,
-                    notes=notas
-                )
-                
-                diff_msg = ""
-                if closed.difference != 0:
-                    diff_msg = f"\n\nDiferencia detectada: ${closed.difference:,.2f}"
+        if reply == QMessageBox.Yes:
+            now_local = datetime.now()
 
-                QMessageBox.information(
-                    self, "Caja Cerrada", 
-                    f"Caja cerrada exitosamente.{diff_msg}"
-                )
-                self.refresh_view()
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Error al cerrar la caja: {str(e)}")
-
-    def load_history(self):
-        """Carga el historial de cajas en la tabla."""
-        history = self.service.get_history(limit=20)
-        self.history_table.setRowCount(len(history))
-
-        for row, reg in enumerate(history):
-            self.history_table.setItem(row, 0, QTableWidgetItem(str(reg.id)))
-            self.history_table.setItem(row, 1, QTableWidgetItem(str(reg.user_id)))
-            self.history_table.setItem(
-                row, 2, QTableWidgetItem(reg.opened_at.strftime("%d/%m/%Y %H:%M") if reg.opened_at else "")
-            )
-            self.history_table.setItem(
-                row, 3, QTableWidgetItem(reg.closed_at.strftime("%d/%m/%Y %H:%M") if reg.closed_at else "ABIERTA")
-            )
-            self.history_table.setItem(row, 4, QTableWidgetItem(f"${reg.opening_amount:,.2f}"))
-            self.history_table.setItem(row, 5, QTableWidgetItem(f"${reg.total_sales:,.2f}"))
+            # Guardar fecha de cierre
+            _set_model_field(self.active_register, ["closed_at", "closing_date"], now_local)
             
-            cierre = f"${reg.closing_amount:,.2f}" if reg.closing_amount is not None else "-"
-            self.history_table.setItem(row, 6, QTableWidgetItem(cierre))
+            # Guardar monto final
+            _set_model_field(self.active_register, ["closing_amount", "final_amount", "closing_balance"], physical_amount)
+            
+            # Guardar notas y cambiar estado
+            _set_model_field(self.active_register, ["notes", "observations"], self.input_notes.text().strip())
+            self.active_register.status = "CLOSED"
 
-            diff = f"${reg.difference:,.2f}" if reg.difference is not None else "-"
-            diff_item = QTableWidgetItem(diff)
+            self.session.commit()
+            QMessageBox.information(self, "Caja Cerrada", "El arqueo de caja se ha realizado exitosamente.")
             
-            # Pintar diferencia en rojo si faltó o sobró dinero
-            if reg.difference and reg.difference != 0:
-                diff_item.setForeground(Qt.GlobalColor.red)
-            
-            self.history_table.setItem(row, 7, diff_item)
+            self.input_physical_amount.clear()
+            self.input_notes.clear()
+            self.refresh_data()

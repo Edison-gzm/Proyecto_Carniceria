@@ -190,10 +190,20 @@ class MainWindow(QMainWindow):
                 products_view.filter_by_category(category_name)
 
     def _navigate(self, name):
+        # 1. Actualizar el estado visual de los botones del navbar
         for btn_name, btn in self.nav_buttons.items():
             btn.setChecked(btn_name == name)
-        self.stack.setCurrentWidget(self.pages[name])
-
+        
+        # 2. Cambiar la vista activa en el stack
+        target_page = self.pages[name]
+        self.stack.setCurrentWidget(target_page)
+        
+        # 3. Refrescar datos si la vista dispone de un método de actualización
+        if hasattr(target_page, "refresh_data"):
+            target_page.refresh_data()
+        elif hasattr(target_page, "load_data"):
+            target_page.load_data()
+            
     def _placeholder_page(self, name):
         page = QWidget()
         layout = QVBoxLayout(page)
