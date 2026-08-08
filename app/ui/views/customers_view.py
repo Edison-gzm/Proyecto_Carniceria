@@ -3,326 +3,311 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QLineEdit, QTableWidget, QTableWidgetItem,
-    QHeaderView, QDialog, QFormLayout,
-    QMessageBox
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
+    QLineEdit, QPushButton, QTableWidget, QTableWidgetItem, 
+    QHeaderView, QMessageBox, QFrame, QFormLayout,
+    QGraphicsDropShadowEffect
 )
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QFont
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QFont, QColor
 
-from database.session import get_session
 from services.customer_service import CustomerService
 from ui.theme import COLORS
 
 
-class CustomerDialog(QDialog):
-    """Diálogo para crear y editar clientes."""
-
-    def __init__(self, parent, session, customer=None):
-        super().__init__(parent)
-        self.session = session
-        self.customer = customer
-        self.is_edit = customer is not None
-        self.setWindowTitle("Editar Cliente" if self.is_edit else "Nuevo Cliente")
-        self.setFixedSize(420, 360)
-        self.setStyleSheet(f"background-color: {COLORS['secondary']}; color: {COLORS['text_primary']};")
-        self._build_ui()
-        if self.is_edit:
-            self._fill_data()
-
-    def _build_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setSpacing(16)
-        layout.setContentsMargins(24, 24, 24, 24)
-
-        title = QLabel("Editar Cliente" if self.is_edit else "Nuevo Cliente")
-        title.setFont(QFont("Segoe UI", 15, QFont.Bold))
-        title.setStyleSheet(f"color: {COLORS['primary']};")
-        layout.addWidget(title)
-
-        form = QFormLayout()
-        form.setSpacing(12)
-
-        self.name_input = QLineEdit()
-        self.name_input.setPlaceholderText("Ej: Juan Pérez")
-        self.name_input.setFixedHeight(40)
-        self.name_input.returnPressed.connect(self._save)
-        form.addRow("Nombre completo *:", self.name_input)
-
-        self.id_input = QLineEdit()
-        self.id_input.setPlaceholderText("Ej: 1234567890")
-        self.id_input.setFixedHeight(40)
-        self.id_input.returnPressed.connect(self._save)
-        form.addRow("Cédula / NIT:", self.id_input)
-
-        self.phone_input = QLineEdit()
-        self.phone_input.setPlaceholderText("Ej: 3001234567")
-        self.phone_input.setFixedHeight(40)
-        self.phone_input.returnPressed.connect(self._save)
-        form.addRow("Teléfono:", self.phone_input)
-
-        self.email_input = QLineEdit()
-        self.email_input.setPlaceholderText("Ej: correo@ejemplo.com")
-        self.email_input.setFixedHeight(40)
-        self.email_input.returnPressed.connect(self._save)
-        form.addRow("Email:", self.email_input)
-
-        layout.addLayout(form)
-        layout.addStretch()
-
-        btn_layout = QHBoxLayout()
-        cancel_btn = QPushButton("Cancelar")
-        cancel_btn.setFixedHeight(40)
-        cancel_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {COLORS['surface_light']};
-                color: {COLORS['text_primary']};
-                border-radius: 6px;
-            }}
-            QPushButton:hover {{ background-color: {COLORS['border']}; }}
-        """)
-        cancel_btn.clicked.connect(self.reject)
-
-        self.save_btn = QPushButton("Guardar")
-        self.save_btn.setFixedHeight(40)
-        self.save_btn.clicked.connect(self._save)
-
-        btn_layout.addWidget(cancel_btn)
-        btn_layout.addWidget(self.save_btn)
-        layout.addLayout(btn_layout)
-
-    def _fill_data(self):
-        self.name_input.setText(self.customer.full_name)
-        self.id_input.setText(self.customer.id_number or "")
-        self.phone_input.setText(self.customer.phone or "")
-        self.email_input.setText(self.customer.email or "")
-
-    def _save(self):
-        name = self.name_input.text().strip()
-        if not name:
-            QMessageBox.warning(self, "Error", "El nombre es obligatorio.")
-            return
-
-        service = CustomerService(self.session)
-        try:
-            if self.is_edit:
-                service.update(
-                    self.customer.id,
-                    full_name=name,
-                    id_number=self.id_input.text().strip(),
-                    phone=self.phone_input.text().strip(),
-                    email=self.email_input.text().strip(),
-                )
-            else:
-                service.create(
-                    full_name=name,
-                    id_number=self.id_input.text().strip(),
-                    phone=self.phone_input.text().strip(),
-                    email=self.email_input.text().strip(),
-                )
-            self.accept()
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"No se pudo guardar: {e}")
-
-
 class CustomersView(QWidget):
-    """Vista principal del módulo de clientes."""
+    """Vista principal del módulo de clientes con diseño CRUD lateral."""
 
     def __init__(self, app):
         super().__init__()
         self.app = app
         self.session = app.session
+        self.selected_customer = None
         self._build_ui()
-        self._load_customers()
+        self._load_table()
 
     def _build_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(32, 24, 32, 24)
-        layout.setSpacing(16)
+        main_layout = QHBoxLayout(self)
+        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setSpacing(16)
 
-        # Encabezado
-        header = QHBoxLayout()
-        title = QLabel("Clientes")
-        title.setFont(QFont("Segoe UI", 22, QFont.Bold))
-        header.addWidget(title)
-        header.addStretch()
+        # -------------------------------------------------------------
+        # PANEL IZQUIERDO: TABLA Y BUSCADOR RESALTADO CON SOMBRA
+        # -------------------------------------------------------------
+        left_layout = QVBoxLayout()
+        
+        top_bar = QHBoxLayout()
+        title = QLabel("Listado de Clientes")
+        title.setFont(QFont("Segoe UI", 18, QFont.Bold))
+        title.setStyleSheet("color: #111111;")
+        top_bar.addWidget(title)
+        top_bar.addStretch()
 
-        self.new_btn = QPushButton("+ Nuevo Cliente")
-        self.new_btn.setFixedHeight(40)
-        self.new_btn.clicked.connect(self._open_create)
-        header.addWidget(self.new_btn)
-        layout.addLayout(header)
-
-        # Búsqueda
+        # Buscador de alta visibilidad con borde resaltado
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Buscar por nombre o cédula...")
-        self.search_input.setFixedHeight(38)
-        self.search_input.textChanged.connect(self._search)
-        layout.addWidget(self.search_input)
+        self.search_input.setPlaceholderText("🔍 Buscar por nombre o cédula...")
+        self.search_input.setFixedWidth(280)
+        self.search_input.setFixedHeight(40)
+        self.search_input.setStyleSheet("""
+            QLineEdit {
+                background-color: #FFFFFF; 
+                color: #0F172A; 
+                font-weight: bold;
+                font-size: 13px;
+                border: 2px solid #2563EB; 
+                border-radius: 8px; 
+                padding: 0 12px;
+            }
+            QLineEdit:focus {
+                border: 2px solid #1D4ED8;
+                background-color: #EFF6FF;
+            }
+        """)
 
-        # Tabla
-        self.table = QTableWidget()
-        self.table.setColumnCount(5)
+        # Efecto de sombra para el buscador
+        search_shadow = QGraphicsDropShadowEffect(self)
+        search_shadow.setBlurRadius(12)
+        search_shadow.setXOffset(0)
+        search_shadow.setYOffset(3)
+        search_shadow.setColor(QColor(0, 0, 0, 45))
+        self.search_input.setGraphicsEffect(search_shadow)
+
+        self.search_input.textChanged.connect(self._load_table)
+        top_bar.addWidget(self.search_input)
+        left_layout.addLayout(top_bar)
+
+        # Tabla de Clientes
+        self.table = QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(["ID", "Nombre", "Cédula/NIT", "Teléfono", "Estado"])
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.table.setColumnWidth(0, 50)
-        self.table.setColumnWidth(2, 140)
-        self.table.setColumnWidth(3, 130)
+        self.table.setColumnWidth(0, 45)
+        self.table.setColumnWidth(2, 130)
+        self.table.setColumnWidth(3, 120)
         self.table.setColumnWidth(4, 90)
-        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.table.setAlternatingRowColors(True)
-        self.table.verticalHeader().setVisible(False)
-        self.table.setStyleSheet(f"""
-            QTableWidget {{
-                background-color: {COLORS['surface']};
-                border: 1px solid {COLORS['border']};
-                border-radius: 8px;
-                gridline-color: {COLORS['border']};
-            }}
-            QTableWidget::item {{
-                padding: 8px;
-                color: {COLORS['text_primary']};
-            }}
-            QTableWidget::item:selected {{
-                background-color: {COLORS['primary']};
-            }}
-            QHeaderView::section {{
-                background-color: {COLORS['surface_light']};
-                color: {COLORS['text_secondary']};
-                padding: 10px;
-                border: none;
-                font-weight: bold;
-            }}
-            QTableWidget::item:alternate {{
-                background-color: {COLORS['surface_light']};
-            }}
-        """)
-        layout.addWidget(self.table)
-
-        # Botones de acción
-        action_layout = QHBoxLayout()
-        action_layout.addStretch()
-
-        self.edit_btn = QPushButton("✏ Editar")
-        self.edit_btn.setFixedHeight(38)
-        self.edit_btn.setFixedWidth(110)
-        self.edit_btn.clicked.connect(self._open_edit)
-
-        self.toggle_btn = QPushButton("⏸ Desactivar")
-        self.toggle_btn.setFixedHeight(38)
-        self.toggle_btn.setFixedWidth(140)
-        self.toggle_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {COLORS['warning']};
+        self.table.setSelectionMode(QTableWidget.SingleSelection)
+        self.table.setStyleSheet("""
+            QTableWidget {
+                background-color: white; 
+                border: 1px solid #E2E8F0; 
+                gridline-color: #F1F5F9; 
+                color: #111111;
+            }
+            QHeaderView::section {
+                background-color: #F8FAFC; 
+                font-weight: bold; 
+                border: none; 
+                padding: 8px; 
+                color: #334155;
+            }
+            QTableWidget::item:selected {
+                background-color: #2563EB;
                 color: white;
-                border-radius: 6px;
-                font-weight: bold;
-            }}
-            QPushButton:hover {{ background-color: #d68910; }}
+            }
         """)
-        self.toggle_btn.clicked.connect(self._toggle_customer)
+        self.table.itemSelectionChanged.connect(self._on_row_selected)
+        left_layout.addWidget(self.table)
 
-        self.delete_btn = QPushButton("🗑 Eliminar")
-        self.delete_btn.setFixedHeight(38)
-        self.delete_btn.setFixedWidth(120)
-        self.delete_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {COLORS['danger']};
-                color: white;
-                border-radius: 6px;
-                font-weight: bold;
+        # -------------------------------------------------------------
+        # PANEL DERECHO: FORMULARIO CREAR / EDITAR CLIENTE
+        # -------------------------------------------------------------
+        panel = QFrame()
+        panel.setFixedWidth(350)
+        panel.setStyleSheet(f"""
+            QFrame {{
+                background-color: {COLORS.get('surface', '#FFFFFF')};
+                border: 1px solid {COLORS.get('border', '#E2E8F0')};
+                border-radius: 10px;
             }}
-            QPushButton:hover {{ background-color: #c0392b; }}
         """)
-        self.delete_btn.clicked.connect(self._delete_customer)
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(16, 16, 16, 16)
+        panel_layout.setSpacing(14)
 
-        action_layout.addWidget(self.edit_btn)
-        action_layout.addWidget(self.toggle_btn)
-        action_layout.addWidget(self.delete_btn)
-        layout.addLayout(action_layout)
+        self.panel_title = QLabel("Crear Nuevo Cliente")
+        self.panel_title.setFont(QFont("Segoe UI", 14, QFont.Bold))
+        self.panel_title.setStyleSheet("border: none; color: #111111;")
+        panel_layout.addWidget(self.panel_title)
 
-    def _load_customers(self):
-        self.session.expire_all() #evitar problemas con la caché
+        form = QFormLayout()
+        form.setSpacing(10)
+
+        INPUT_STYLE = """
+            QLineEdit {
+                background-color: #FFFFFF; 
+                color: #111111; 
+                font-weight: bold;
+                border: 1.5px solid #64748B; 
+                border-radius: 6px; 
+                padding: 6px;
+            }
+            QLineEdit:focus { 
+                border: 2px solid #2563EB; 
+            }
+        """
+
+        self.txt_name = QLineEdit()
+        self.txt_name.setStyleSheet(INPUT_STYLE)
+        
+        self.txt_id = QLineEdit()
+        self.txt_id.setStyleSheet(INPUT_STYLE)
+
+        self.txt_phone = QLineEdit()
+        self.txt_phone.setStyleSheet(INPUT_STYLE)
+
+        self.txt_email = QLineEdit()
+        self.txt_email.setStyleSheet(INPUT_STYLE)
+
+        form.addRow("Nombre *:", self.txt_name)
+        form.addRow("Cédula/NIT:", self.txt_id)
+        form.addRow("Teléfono:", self.txt_phone)
+        form.addRow("Email:", self.txt_email)
+        panel_layout.addLayout(form)
+
+        # Botones de Acción CRUD
+        self.btn_save = QPushButton("➕ Crear Cliente")
+        self.btn_new = QPushButton("✨ Limpiar Formulario")
+        self.btn_delete = QPushButton("🗑️ Eliminar Seleccionado")
+
+        self.btn_save.setFixedHeight(40)
+        self.btn_new.setFixedHeight(36)
+        self.btn_delete.setFixedHeight(36)
+
+        self.btn_save.setCursor(Qt.PointingHandCursor)
+        self.btn_new.setCursor(Qt.PointingHandCursor)
+        self.btn_delete.setCursor(Qt.PointingHandCursor)
+
+        self.btn_save.setStyleSheet("background-color: #16A34A; color: white; font-weight: bold; border-radius: 6px; border: none; font-size: 13px;")
+        self.btn_new.setStyleSheet("background-color: #64748B; color: white; font-weight: bold; border-radius: 6px; border: none;")
+        self.btn_delete.setStyleSheet("background-color: #DC2626; color: white; font-weight: bold; border-radius: 6px; border: none;")
+
+        self.btn_save.clicked.connect(self._save_customer)
+        self.btn_new.clicked.connect(self._clear_form)
+        self.btn_delete.clicked.connect(self._delete_customer)
+
+        panel_layout.addWidget(self.btn_save)
+        panel_layout.addWidget(self.btn_new)
+        panel_layout.addWidget(self.btn_delete)
+        panel_layout.addStretch()
+
+        main_layout.addLayout(left_layout, stretch=2)
+        main_layout.addWidget(panel, stretch=1)
+
+    def _load_table(self):
+        self.table.setRowCount(0)
+        self.session.expire_all()
         service = CustomerService(self.session)
-        customers = service.get_all(only_active=False)
-        self._populate_table(customers)
 
-    def _search(self, text):
-        if not text.strip():
-            self._load_customers()
-            return
-        service = CustomerService(self.session)
-        customers = service.search(text)
-        self._populate_table(customers)
+        query = self.search_input.text().strip()
+        if query:
+            customers = service.search(query)
+        else:
+            customers = service.get_all(only_active=False)
 
-    def _populate_table(self, customers):
-        self.table.setRowCount(len(customers))
-        for row, c in enumerate(customers):
+        for c in customers:
+            row = self.table.rowCount()
+            self.table.insertRow(row)
+            
             self.table.setItem(row, 0, QTableWidgetItem(str(c.id)))
             self.table.setItem(row, 1, QTableWidgetItem(c.full_name))
             self.table.setItem(row, 2, QTableWidgetItem(c.id_number or ""))
             self.table.setItem(row, 3, QTableWidgetItem(c.phone or ""))
-            estado = QTableWidgetItem("Activo" if c.is_active else "Inactivo")
-            estado.setForeground(Qt.green if c.is_active else Qt.red)
-            self.table.setItem(row, 4, estado)
-            self.table.item(row, 0).setData(Qt.UserRole, c.id)
+            
+            status_item = QTableWidgetItem("Activo" if c.is_active else "Inactivo")
+            status_item.setForeground(Qt.green if c.is_active else Qt.red)
+            self.table.setItem(row, 4, status_item)
 
-    def _get_selected_id(self):
-        row = self.table.currentRow()
-        if row < 0:
-            QMessageBox.warning(self, "Aviso", "Selecciona un cliente primero.")
-            return None
-        return self.table.item(row, 0).data(Qt.UserRole)
-
-    def _open_create(self):
-        dialog = CustomerDialog(self, self.session)
-        if dialog.exec():
-            self._load_customers()
-
-    def _open_edit(self):
-        customer_id = self._get_selected_id()
-        if not customer_id:
+    def _on_row_selected(self):
+        selected_items = self.table.selectedItems()
+        if not selected_items:
             return
-        service = CustomerService(self.session)
-        customer = service.get_by_id(customer_id)
-        dialog = CustomerDialog(self, self.session, customer)
-        if dialog.exec():
-            self._load_customers()
 
-    def _toggle_customer(self):
-        customer_id = self._get_selected_id()
-        if not customer_id:
-            return
+        row = selected_items[0].row()
+        customer_id = int(self.table.item(row, 0).text())
+
         service = CustomerService(self.session)
-        customer = service.get_by_id(customer_id)
-        action = "desactivar" if customer.is_active else "activar"
-        reply = QMessageBox.question(
-            self, "Confirmar",
-            f"¿Seguro que quieres {action} a '{customer.full_name}'?",
-            QMessageBox.Yes | QMessageBox.No
-        )
-        if reply == QMessageBox.Yes:
-            service.toggle_active(customer_id)
-            self._load_customers()
+        self.selected_customer = service.get_by_id(customer_id)
+
+        if self.selected_customer:
+            self.panel_title.setText("Editar Cliente")
+            self.btn_save.setText("💾 Actualizar Cliente")
+            self.txt_name.setText(self.selected_customer.full_name)
+            self.txt_id.setText(self.selected_customer.id_number or "")
+            self.txt_phone.setText(self.selected_customer.phone or "")
+            self.txt_email.setText(self.selected_customer.email or "")
+
+    def _clear_form(self):
+        self.selected_customer = None
+        self.panel_title.setText("Crear Nuevo Cliente")
+        self.btn_save.setText("➕ Crear Cliente")
+        self.txt_name.clear()
+        self.txt_id.clear()
+        self.txt_phone.clear()
+        self.txt_email.clear()
+        self.table.clearSelection()
+
+    def _save_customer(self):
+        name = self.txt_name.text().strip()
+        # Verifica si en tu UI el campo se llama txt_id o txt_id_number
+        id_number = self.txt_id.text().strip() if hasattr(self, 'txt_id') else self.txt_id_number.text().strip()
+        phone = self.txt_phone.text().strip()
+        email = self.txt_email.text().strip()
+        address = self.txt_address.text().strip() if hasattr(self, 'txt_address') else ""
+
+        if not name:
+            QMessageBox.warning(self, "Atención", "El nombre completo es obligatorio.")
+            return
+
+        service = CustomerService(self.session)
+
+        try:
+            if self.selected_customer:
+                service.update(
+                    self.selected_customer.id,
+                    full_name=name,
+                    id_number=id_number,
+                    phone=phone,
+                    email=email,
+                    address=address
+                )
+                QMessageBox.information(self, "Éxito", "Cliente actualizado correctamente.")
+            else:
+                service.create(
+                    full_name=name,
+                    id_number=id_number,
+                    phone=phone,
+                    email=email,
+                    address=address,
+                    created_by_id=self.app.current_user.id
+                )
+                QMessageBox.information(self, "Éxito", "Cliente creado exitosamente.")
+
+            self._clear_form()
+            self._load_table()
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"No se pudo guardar el cliente: {e}")
 
     def _delete_customer(self):
-        customer_id = self._get_selected_id()
-        if not customer_id:
+        if not self.selected_customer:
+            QMessageBox.warning(self, "Atención", "Selecciona primero un cliente de la tabla para eliminar.")
             return
-        service = CustomerService(self.session)
-        customer = service.get_by_id(customer_id)
-        reply = QMessageBox.warning(
-            self, "Eliminar cliente",
-            f"¿Eliminar permanentemente a '{customer.full_name}'?\nEsta acción no se puede deshacer.",
+
+        reply = QMessageBox.question(
+            self, "Confirmar eliminación",
+            f"¿Estás seguro de que deseas eliminar permanentemente al cliente '{self.selected_customer.full_name}'?\nEsta acción no se puede deshacer.",
             QMessageBox.Yes | QMessageBox.No
         )
+
         if reply == QMessageBox.Yes:
             try:
-                self.session.delete(customer)
+                self.session.delete(self.selected_customer)
                 self.session.commit()
-                self._load_customers()
+                self._clear_form()
+                self._load_table()
+                QMessageBox.information(self, "Éxito", "Cliente eliminado correctamente.")
             except Exception as e:
                 self.session.rollback()
-                QMessageBox.critical(self, "Error", f"No se pudo eliminar: {e}\n\nSi el cliente tiene ventas asociadas, desactívalo en lugar de eliminarlo.")
+                QMessageBox.critical(
+                    self, "Error al eliminar", 
+                    f"No se pudo eliminar el cliente. Si ya posee facturas o ventas asociadas, se recomienda únicamente desactivarlo.\n\nDetalle: {e}"
+                )

@@ -75,17 +75,21 @@ class ProductService:
 class CategoryService:
     def __init__(self, session: Session):
         self.session = session
- 
+
     def get_all(self, only_active: bool = True) -> list[Category]:
         q = self.session.query(Category)
         if only_active:
             q = q.filter_by(is_active=True)
         return q.order_by(Category.name).all()
- 
+
     def create(self, name: str, description: str = "") -> Category:
-        category = Category(name=name, description=description)
+        category = Category(
+            name=name,
+            description=description
+        )
         self.session.add(category)
         self.session.commit()
+        self.session.refresh(category)
         return category
  
     def update(self, category_id: int, **kwargs) -> Category | None:

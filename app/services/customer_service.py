@@ -31,9 +31,11 @@ class CustomerService:
         )
  
     def create(self, full_name: str, id_number: str = "",
-               phone: str = "", email: str = "", address: str = "") -> Customer:
-        customer = Customer(full_name=full_name, id_number=id_number,
-                            phone=phone, email=email, address=address)
+               phone: str = "", email: str = "", address: str = "", created_by_id: int | None = None) -> Customer:
+        customer = Customer(
+            full_name=full_name, id_number=id_number,
+            phone=phone, email=email, address=address, created_by_id=created_by_id
+        )
         self.session.add(customer)
         self.session.commit()
         return customer

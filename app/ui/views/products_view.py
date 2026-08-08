@@ -1,4 +1,5 @@
 import sys
+from database.models.user import UserRole
 from pathlib import Path
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
@@ -25,7 +26,20 @@ class ProductsView(QWidget):
         self.session = app.session
         self.selected_product = None
         self._build_ui()
+        self._apply_role_permissions()
         self._load_data()
+
+    def _is_admin(self) -> bool:
+        """Verifica si el usuario actual tiene rol de Administrador."""
+        if not hasattr(self.app, 'current_user') or not self.app.current_user:
+            return False
+        role = getattr(self.app.current_user, 'role', None)
+        return role == UserRole.ADMIN or str(role).upper() == "ADMIN"
+
+    def _apply_role_permissions(self):
+        """Oculta o deshabilita acciones no permitidas para usuarios no administradores."""
+        if not self._is_admin():
+            self.btn_delete.setVisible(False)
 
     def _build_ui(self):
         main_layout = QHBoxLayout(self)
@@ -175,6 +189,14 @@ class ProductsView(QWidget):
             self.table.setItem(row, 3, QTableWidgetItem(format_price(prod.price)))
 
     def _on_row_selected(self):
+        # Si NO es admin, no se permite cargar el producto para edición o eliminación
+        if not self._is_admin():
+            self.selected_product = None
+            self.panel_title.setText("Crear Nuevo Producto")
+            self.btn_save.setText("➕ Crear Producto")
+            self.btn_save.setEnabled(True)
+            return
+
         selected_items = self.table.selectedItems()
         if not selected_items:
             return
@@ -186,8 +208,6 @@ class ProductsView(QWidget):
         self.selected_product = prod_service.get_by_id(prod_id)
 
         if self.selected_product:
-            self.panel_title.setText("Editar Producto")
-            self.btn_save.setText("💾 Actualizar Producto")
             self.txt_name.setText(self.selected_product.name)
             self.txt_price.setText(str(int(float(str(self.selected_product.price)))))
 
@@ -196,10 +216,23 @@ class ProductsView(QWidget):
                     self.cmb_category.setCurrentIndex(i)
                     break
 
+            self.panel_title.setText("Editar Producto")
+            self.btn_save.setText("💾 Actualizar Producto")
+            self.btn_save.setEnabled(True)
+            self.btn_delete.setEnabled(True)
+
     def _clear_form(self):
         self.selected_product = None
         self.panel_title.setText("Crear Nuevo Producto")
         self.btn_save.setText("➕ Crear Producto")
+        self.btn_save.setEnabled(True)
+        
+        if self._is_admin():
+            self.btn_delete.setVisible(True)
+            self.btn_delete.setEnabled(True)
+        else:
+            self.btn_delete.setVisible(False)
+
         self.txt_name.clear()
         self.txt_price.clear()
         self.table.clearSelection()
@@ -221,17 +254,25 @@ class ProductsView(QWidget):
 
         prod_service = ProductService(self.session)
 
-        if self.selected_product:
+        # Si hay producto seleccionado Y es admin, se actualiza; de lo contrario, SIEMPRE se crea
+        if self.selected_product and self._is_admin():
             prod_service.update(self.selected_product.id, name=name, price=price, category_id=category_id)
             QMessageBox.information(self, "Éxito", "Producto actualizado correctamente.")
         else:
-            prod_service.create(name=name, price=price, category_id=category_id, unit=UnitType.KILO)
+            prod_service.create(
+                name=name, price=price, category_id=category_id, 
+                unit=UnitType.KILO
+            )
             QMessageBox.information(self, "Éxito", "Producto creado exitosamente.")
 
         self._clear_form()
-        self._load_table()
+        self._load_table()  
 
     def _delete_product(self):
+        if not self._is_admin():
+            QMessageBox.warning(self, "Acceso Denegado", "Solo los administradores pueden eliminar productos.")
+            return
+
         if not self.selected_product:
             QMessageBox.warning(self, "Atención", "Selecciona primero un producto de la tabla para eliminar.")
             return

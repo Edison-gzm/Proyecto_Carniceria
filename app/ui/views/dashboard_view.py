@@ -213,7 +213,8 @@ class DashboardView(QWidget):
         left_layout.addWidget(scroll)
 
         right_panel = QFrame()
-        right_panel.setFixedWidth(400)
+        #right_panel.setFixedWidth(400)
+        right_panel = QFrame()
         right_panel.setStyleSheet(f"""
             QFrame {{
                 background-color: {COLORS.get('surface', '#FFFFFF')};
@@ -284,8 +285,10 @@ class DashboardView(QWidget):
         action_btn_box.addWidget(process_btn)
         cart_layout.addLayout(action_btn_box)
 
-        main_layout.addLayout(left_layout, stretch=2)
-        main_layout.addWidget(right_panel, stretch=1)
+       # main_layout.addLayout(left_layout, stretch=2)
+       # main_layout.addWidget(right_panel, stretch=1)
+        main_layout.addLayout(left_layout, stretch=4)  # 40% para el Catálogo
+        main_layout.addWidget(right_panel, stretch=6)   # 60% para la Lista de Compra
 
     def _filter_category(self, category_name):
         self.selected_category_name = category_name

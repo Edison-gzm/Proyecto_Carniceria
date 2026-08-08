@@ -356,8 +356,8 @@ class SalesView(QWidget):
         # Panel derecho: carrito y total
         right = self._build_right_panel()
 
-        root.addLayout(left, 5)
-        root.addLayout(right, 4)
+        root.addLayout(left, 4)   # 40% Catálogo
+        root.addLayout(right, 6)  # 60% Carrito
 
     def _build_left_panel(self):
         layout = QVBoxLayout()

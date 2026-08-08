@@ -6,7 +6,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from database.session import get_session
 from services.product_service import ProductService, CategoryService
+from services.auth_service import AuthService
 from database.models.product import UnitType
+from database.models.user import UserRole, User
 
 PRODUCTS_DATA = {
     "Carne de Vaca": [
@@ -82,13 +84,27 @@ PRODUCTS_DATA = {
 
 def run_seed():
     session = get_session()
+    auth_service = AuthService(session)
     cat_service = CategoryService(session)
     prod_service = ProductService(session)
 
     print("🚀 Iniciando carga de datos...")
 
     try:
-        # 1. Obtener o crear categorías
+        # 1. Crear usuario Administrador si no existe
+        admin_user = session.query(User).filter_by(username="admin").first()
+        if not admin_user:
+            auth_service.create_user(
+                username="admin",
+                password="admin123",
+                full_name="Administrador Principal",
+                role=UserRole.ADMIN
+            )
+            print("  [+] Usuario 'admin' creado exitosamente (Clave: admin123)")
+        else:
+            print("  [i] El usuario 'admin' ya existe.")
+
+        # 2. Obtener o crear categorías
         existing_categories = {c.name: c.id for c in cat_service.get_all()}
         category_map = {}
 
@@ -100,7 +116,7 @@ def run_seed():
                 category_map[cat_name] = new_cat.id
                 print(f"  [+] Categoría creada: {cat_name}")
 
-        # 2. Insertar productos
+        # 3. Insertar productos
         existing_products = {p.name.lower() for p in prod_service.get_all(only_active=False)}
         created_count = 0
 
@@ -119,7 +135,7 @@ def run_seed():
                     created_count += 1
 
         session.commit()
-        print(f"✅ ¡ÉXITO! Se guardaron {created_count} productos en la base de datos.")
+        print(f"✅ ¡ÉXITO! Se crearon los datos iniciales y {created_count} productos.")
 
     except Exception as e:
         session.rollback()

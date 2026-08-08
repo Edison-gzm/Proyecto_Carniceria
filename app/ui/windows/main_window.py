@@ -15,13 +15,16 @@ from ui.views.dashboard_view import DashboardView
 from ui.views.products_view import ProductsView
 from ui.views.customers_view import CustomersView
 from ui.views.sales_view import SalesView
-from ui.views.cash_register_view import CashRegisterView  # 👈 Importamos la vista de Caja
+from ui.views.cash_register_view import CashRegisterView
+from ui.views.users_view import UsersView
+from database.models.user import UserRole
 
 
 class MainWindow(QMainWindow):
     def __init__(self, app):
         super().__init__()
         self.app = app
+        self.is_admin = (self.app.current_user.role == UserRole.ADMIN or str(self.app.current_user.role).upper() == "ADMIN")
         self.setWindowTitle("Sistema de Facturación — Carnicería")
         self.setMinimumSize(1100, 700)
         self._center_window()
@@ -41,21 +44,20 @@ class MainWindow(QMainWindow):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # 1. Barra superior de navegación (Pestañas horizontales)
         navbar = self._build_navbar()
         main_layout.addWidget(navbar)
 
-        # 2. Área de contenido
         self.stack = QStackedWidget()
         self.stack.setStyleSheet(f"background-color: {COLORS['secondary']};")
         main_layout.addWidget(self.stack)
 
-        # Configuración de vistas
         self.pages = {}
-        modules = [
-            "INICIO", "Ventas", "Productos",
-            "Clientes", "Caja", "Reportes"
-        ]
+        modules = ["INICIO", "Ventas", "Productos", "Clientes", "Caja"]
+        
+        if self.is_admin:
+            modules.append("Usuarios")
+        
+        modules.append("Reportes")
 
         for name in modules:
             if name == "INICIO":
@@ -67,18 +69,18 @@ class MainWindow(QMainWindow):
             elif name == "Ventas":
                 page = SalesView(self.app)
             elif name == "Caja":
-                # 👈 AQUÍ CONECTAMOS LA VISTA DE CAJA
                 page = CashRegisterView(
                     session=self.app.session,
                     current_user_id=self.app.current_user.id
                 )
+            elif name == "Usuarios":
+                page = UsersView(self.app)
             else:
                 page = self._placeholder_page(name)
 
             self.pages[name] = page
             self.stack.addWidget(page)
 
-        # Mostrar INICIO por defecto
         self.stack.setCurrentWidget(self.pages["INICIO"])
 
     def _build_navbar(self):
@@ -95,21 +97,23 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(16, 0, 16, 0)
         layout.setSpacing(8)
 
-        # Logo / Nombre
         app_name = QLabel("🥩 Carnicería")
         app_name.setFont(QFont("Segoe UI", 13, QFont.Bold))
         app_name.setStyleSheet(f"color: {COLORS['primary']}; border: none; margin-right: 12px;")
         layout.addWidget(app_name)
 
-        # Botones de las Pestañas
         nav_items = [
             ("📊", "INICIO"),
             ("🛒", "Ventas"),
             ("🥩", "Productos"),
             ("👥", "Clientes"),
             ("💰", "Caja"),
-            ("📈", "Reportes"),
         ]
+
+        if self.is_admin:
+            nav_items.append(("👤", "Usuarios"))
+
+        nav_items.append(("📈", "Reportes"))
 
         self.nav_buttons = {}
         for icon, name in nav_items:
@@ -141,19 +145,16 @@ class MainWindow(QMainWindow):
             self.nav_buttons[name] = btn
             layout.addWidget(btn)
 
-        # Marcar INICIO por defecto
         if "INICIO" in self.nav_buttons:
             self.nav_buttons["INICIO"].setChecked(True)
 
         layout.addStretch()
 
-        # Info del usuario
         user = self.app.current_user
-        user_label = QLabel(f"👤 {user.full_name}")
+        user_label = QLabel(f"👤 {user.full_name} ({'Admin' if self.is_admin else 'Cajero'})")
         user_label.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 12px; font-weight: bold; border: none;")
         layout.addWidget(user_label)
 
-        # Botón Cerrar Sesión
         logout_btn = QPushButton("⬅ Salir")
         logout_btn.setFixedHeight(34)
         logout_btn.setCursor(Qt.PointingHandCursor)
@@ -178,32 +179,19 @@ class MainWindow(QMainWindow):
         return navbar
 
     def show_products_category(self, category_name):
-        """Redirige a la vista de Productos y aplica el filtro por categoría."""
         if "Productos" in self.pages:
             self.stack.setCurrentWidget(self.pages["Productos"])
-            
             for btn_name, btn in self.nav_buttons.items():
                 btn.setChecked(btn_name == "Productos")
-
             products_view = self.pages["Productos"]
             if hasattr(products_view, 'filter_by_category'):
                 products_view.filter_by_category(category_name)
 
     def _navigate(self, name):
-        # 1. Actualizar el estado visual de los botones del navbar
         for btn_name, btn in self.nav_buttons.items():
             btn.setChecked(btn_name == name)
-        
-        # 2. Cambiar la vista activa en el stack
-        target_page = self.pages[name]
-        self.stack.setCurrentWidget(target_page)
-        
-        # 3. Refrescar datos si la vista dispone de un método de actualización
-        if hasattr(target_page, "refresh_data"):
-            target_page.refresh_data()
-        elif hasattr(target_page, "load_data"):
-            target_page.load_data()
-            
+        self.stack.setCurrentWidget(self.pages[name])
+
     def _placeholder_page(self, name):
         page = QWidget()
         layout = QVBoxLayout(page)
