@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel, 
     QPushButton, QScrollArea, QFrame, QTableWidget, 
     QTableWidgetItem, QHeaderView, QGridLayout, QLineEdit,
-    QDialog, QDoubleSpinBox, QToolButton
+    QDialog, QDoubleSpinBox, QToolButton, QMessageBox
 )
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QFont, QPixmap, QIcon
@@ -111,7 +111,7 @@ class QuantityDialog(QDialog):
         return self.spin_qty.value()
 
 
-class DashboardView(QWidget):
+class SalesPosView(QWidget):
     def __init__(self, main_window):
         super().__init__()
         self.main_window = main_window
@@ -156,7 +156,7 @@ class DashboardView(QWidget):
         top_bar.addWidget(self.search_input)
         left_layout.addLayout(top_bar)
 
-        # Filtro de Categorías SÓLO IMÁGENES
+        # Filtro de Categorías
         cat_scroll = QScrollArea()
         cat_scroll.setFixedHeight(80)
         cat_scroll.setWidgetResizable(True)
@@ -212,8 +212,6 @@ class DashboardView(QWidget):
         scroll.setWidget(self.products_container)
         left_layout.addWidget(scroll)
 
-        right_panel = QFrame()
-        #right_panel.setFixedWidth(400)
         right_panel = QFrame()
         right_panel.setStyleSheet(f"""
             QFrame {{
@@ -281,14 +279,15 @@ class DashboardView(QWidget):
             }
             QPushButton:hover { background-color: #15803D; }
         """)
+        # <-- CONEXIÓN AGREGADA -->
+        process_btn.clicked.connect(self._process_sale)
+
         action_btn_box.addWidget(clear_btn)
         action_btn_box.addWidget(process_btn)
         cart_layout.addLayout(action_btn_box)
 
-       # main_layout.addLayout(left_layout, stretch=2)
-       # main_layout.addWidget(right_panel, stretch=1)
-        main_layout.addLayout(left_layout, stretch=4)  # 40% para el Catálogo
-        main_layout.addWidget(right_panel, stretch=6)   # 60% para la Lista de Compra
+        main_layout.addLayout(left_layout, stretch=4)
+        main_layout.addWidget(right_panel, stretch=6)
 
     def _filter_category(self, category_name):
         self.selected_category_name = category_name
@@ -474,3 +473,79 @@ class DashboardView(QWidget):
             self.cart_table.setCellWidget(row, 3, actions_widget)
 
         self.total_label.setText(f"Total: {format_price(total)}")
+
+    def _process_sale(self):
+        """Procesa la venta actual y la guarda en la base de datos."""
+        if not self.cart:
+            QMessageBox.warning(self, "Carrito Vacío", "No hay productos en la lista para procesar la venta.")
+            return
+
+        total_amount = sum(item['subtotal'] for item in self.cart.values())
+
+        reply = QMessageBox.question(
+            self,
+            "Confirmar Venta",
+            f"¿Desea completar la venta por un total de {format_price(total_amount)}?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+
+        if reply != QMessageBox.Yes:
+            return
+
+        try:
+            # 1. Intentar usar SaleService si está disponible
+            try:
+                from services.sale_service import SaleService
+                sale_service = SaleService(self.session)
+                
+                items = [
+                    {
+                        'product_id': pid,
+                        'quantity': item['qty'],
+                        'unit_price': float(item['product'].price),
+                        'subtotal': item['subtotal']
+                    }
+                    for pid, item in self.cart.items()
+                ]
+                
+                current_user_id = getattr(self.app.current_user, 'id', None)
+                sale_service.create_sale(
+                    user_id=current_user_id,
+                    items=items,
+                    total=total_amount
+                )
+            except (ImportError, AttributeError):
+                # 2. Si no existe SaleService, registrar directamente con el modelo Sale/SaleDetail
+                from database.models.sale import Sale, SaleDetail
+                
+                current_user_id = getattr(self.app.current_user, 'id', None)
+                new_sale = Sale(
+                    user_id=current_user_id,
+                    total=total_amount
+                )
+                self.session.add(new_sale)
+                self.session.flush()
+
+                for pid, item in self.cart.items():
+                    detail = SaleDetail(
+                        sale_id=new_sale.id,
+                        product_id=pid,
+                        quantity=item['qty'],
+                        unit_price=float(item['product'].price),
+                        subtotal=item['subtotal']
+                    )
+                    self.session.add(detail)
+                    
+                    # Descontar stock si el modelo Product tiene el atributo stock
+                    product = item['product']
+                    if hasattr(product, 'stock') and product.stock is not None:
+                        product.stock -= item['qty']
+
+                self.session.commit()
+
+            QMessageBox.information(self, "Venta Exitosa", "¡La venta se ha registrado correctamente!")
+            self._clear_cart()
+
+        except Exception as e:
+            self.session.rollback()
+            QMessageBox.critical(self, "Error al procesar venta", f"No se pudo registrar la venta:\n{str(e)}")

@@ -11,7 +11,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 
 from ui.theme import COLORS
-from ui.views.dashboard_view import DashboardView
+from ui.views.salespos_view import SalesPosView
 from ui.views.products_view import ProductsView
 from ui.views.customers_view import CustomersView
 from ui.views.sales_view import SalesView
@@ -52,7 +52,7 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(self.stack)
 
         self.pages = {}
-        modules = ["INICIO", "Ventas", "Productos", "Clientes", "Caja"]
+        modules = ["Vender (POS)", "Historial Ventas", "Productos", "Clientes", "Caja"]
         
         if self.is_admin:
             modules.append("Usuarios")
@@ -60,14 +60,14 @@ class MainWindow(QMainWindow):
         modules.append("Reportes")
 
         for name in modules:
-            if name == "INICIO":
-                page = DashboardView(self)
+            if name == "Vender (POS)":
+                page = SalesPosView(self)  # <-- Corregido: se pasa 'self' (la ventana principal)
+            elif name == "Historial Ventas":
+                page = SalesView(self.app)
             elif name == "Productos":
                 page = ProductsView(self.app)
             elif name == "Clientes":
                 page = CustomersView(self.app)
-            elif name == "Ventas":
-                page = SalesView(self.app)
             elif name == "Caja":
                 page = CashRegisterView(
                     session=self.app.session,
@@ -81,7 +81,7 @@ class MainWindow(QMainWindow):
             self.pages[name] = page
             self.stack.addWidget(page)
 
-        self.stack.setCurrentWidget(self.pages["INICIO"])
+        self.stack.setCurrentWidget(self.pages["Vender (POS)"])
 
     def _build_navbar(self):
         navbar = QFrame()
@@ -103,8 +103,8 @@ class MainWindow(QMainWindow):
         layout.addWidget(app_name)
 
         nav_items = [
-            ("📊", "INICIO"),
-            ("🛒", "Ventas"),
+            ("🛒", "Vender (POS)"),
+            ("📋", "Historial Ventas"),
             ("🥩", "Productos"),
             ("👥", "Clientes"),
             ("💰", "Caja"),
@@ -145,8 +145,8 @@ class MainWindow(QMainWindow):
             self.nav_buttons[name] = btn
             layout.addWidget(btn)
 
-        if "INICIO" in self.nav_buttons:
-            self.nav_buttons["INICIO"].setChecked(True)
+        if "Vender (POS)" in self.nav_buttons:
+            self.nav_buttons["Vender (POS)"].setChecked(True)
 
         layout.addStretch()
 

@@ -181,17 +181,21 @@ class CashRegisterView(QWidget):
             self._ui_state_no_register()
             return
 
-        # 2. Obtener fecha de apertura y monto inicial con soporte de múltiples nombres de columna
+        # 2. Obtener fecha de apertura y monto inicial
         opened_at = _get_model_field(self.active_register, "opened_at", "opening_date", "created_at")
         initial_amount = _get_model_field(self.active_register, "opening_amount", "initial_amount", "initial_balance", default=0.0)
 
-        # 3. Consultar las ventas creadas desde la fecha de apertura
+        # 3. Consultar las ventas asociadas a esta caja o por fecha de apertura
         sales_query = self.session.query(Sale)
-        if opened_at:
+        
+        if hasattr(Sale, 'cash_register_id'):
+            sales_query = sales_query.filter(Sale.cash_register_id == self.active_register.id)
+        elif opened_at:
             sales_query = sales_query.filter(Sale.created_at >= opened_at)
 
+        # Corrección: Filtrar por estado CLOSED en lugar de COMPLETED
         if hasattr(Sale, 'status'):
-            sales_query = sales_query.filter(Sale.status == 'COMPLETED')
+            sales_query = sales_query.filter(Sale.status == 'CLOSED')
 
         total_sales = sales_query.with_entities(func.sum(Sale.total)).scalar() or 0.0
         expected_total = float(initial_amount) + float(total_sales)
@@ -230,49 +234,40 @@ class CashRegisterView(QWidget):
         for row, sale in enumerate(sales_list):
             self.table_sales.insertRow(row)
 
-            # ID Venta
             item_id = QTableWidgetItem(str(sale.id))
             item_id.setTextAlignment(Qt.AlignCenter)
             self.table_sales.setItem(row, 0, item_id)
 
-            # Hora local de la venta
             created = getattr(sale, 'created_at', None)
             hora_str = created.strftime("%H:%M:%S") if created else "N/A"
             item_hora = QTableWidgetItem(hora_str)
             item_hora.setTextAlignment(Qt.AlignCenter)
             self.table_sales.setItem(row, 1, item_hora)
 
-            # Cliente
             cliente_nombre = "Cliente General"
             if hasattr(sale, 'customer') and sale.customer:
                 cliente_nombre = getattr(sale.customer, 'full_name', getattr(sale.customer, 'name', 'Cliente'))
             item_cliente = QTableWidgetItem(cliente_nombre)
             self.table_sales.setItem(row, 2, item_cliente)
 
-            # Método de Pago
             metodo = getattr(sale, 'payment_method', 'Efectivo')
             item_pago = QTableWidgetItem(str(metodo))
             item_pago.setTextAlignment(Qt.AlignCenter)
             self.table_sales.setItem(row, 3, item_pago)
 
-            # Total
             total_val = getattr(sale, 'total', 0.0)
             item_total = QTableWidgetItem(f"${total_val:,.2f}")
             item_total.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             self.table_sales.setItem(row, 4, item_total)
 
     def _handle_cash_action(self):
-        """Maneja el clic del botón (Abrir o Cerrar caja)."""
         if not self.active_register:
             self._open_register()
         else:
             self._close_register()
 
     def _open_register(self):
-        """Abre un nuevo turno registrando la hora exacta de la computadora."""
-        now_local = datetime.now()  # 👈 Toma la hora local del PC
-
-        # Crear instancia de caja pasando las columnas dinámicamente según la DB
+        now_local = datetime.now()
         cols = [c.key for c in CashRegister.__table__.columns]
         
         kwargs = {
@@ -280,13 +275,11 @@ class CashRegisterView(QWidget):
             "status": "OPEN"
         }
 
-        # Asignar fecha de apertura
         if "opened_at" in cols:
             kwargs["opened_at"] = now_local
         elif "opening_date" in cols:
             kwargs["opening_date"] = now_local
 
-        # Asignar monto inicial (0.0 por defecto)
         for col_name in ["opening_amount", "initial_amount", "initial_balance", "opening_balance"]:
             if col_name in cols:
                 kwargs[col_name] = 0.0
@@ -300,7 +293,6 @@ class CashRegisterView(QWidget):
         self.refresh_data()
 
     def _close_register(self):
-        """Cierra el turno actual de caja."""
         physical_text = self.input_physical_amount.text().strip()
         if not physical_text:
             QMessageBox.warning(self, "Atención", "Por favor ingrese el monto físico contado en caja.")
@@ -312,7 +304,6 @@ class CashRegisterView(QWidget):
             QMessageBox.warning(self, "Atención", "El monto físico debe ser un número válido.")
             return
 
-        # Confirmación con botones explicítos Yes/No
         reply = QMessageBox.question(
             self,
             "Confirmar Cierre de Caja",
@@ -324,13 +315,8 @@ class CashRegisterView(QWidget):
         if reply == QMessageBox.Yes:
             now_local = datetime.now()
 
-            # Guardar fecha de cierre
             _set_model_field(self.active_register, ["closed_at", "closing_date"], now_local)
-            
-            # Guardar monto final
             _set_model_field(self.active_register, ["closing_amount", "final_amount", "closing_balance"], physical_amount)
-            
-            # Guardar notas y cambiar estado
             _set_model_field(self.active_register, ["notes", "observations"], self.input_notes.text().strip())
             self.active_register.status = "CLOSED"
 
