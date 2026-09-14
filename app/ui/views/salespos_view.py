@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel, 
     QPushButton, QScrollArea, QFrame, QTableWidget, 
     QTableWidgetItem, QHeaderView, QGridLayout, QLineEdit,
-    QDialog, QDoubleSpinBox, QToolButton, QMessageBox
+    QDialog, QDoubleSpinBox, QToolButton, QMessageBox, QComboBox
 )
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QFont, QPixmap, QIcon
@@ -121,6 +121,7 @@ class SalesPosView(QWidget):
         self.selected_category_name = "Todas"
         self._build_ui()
         self._load_products()
+        self._load_customers()
 
     def _build_ui(self):
         main_layout = QHBoxLayout(self)
@@ -212,6 +213,7 @@ class SalesPosView(QWidget):
         scroll.setWidget(self.products_container)
         left_layout.addWidget(scroll)
 
+        # --- PANEL DERECHO (Carrito) ---
         right_panel = QFrame()
         right_panel.setStyleSheet(f"""
             QFrame {{
@@ -228,6 +230,49 @@ class SalesPosView(QWidget):
         cart_title.setFont(QFont("Segoe UI", 14, QFont.Bold))
         cart_title.setStyleSheet("border: none; color: #111111;")
         cart_layout.addWidget(cart_title)
+
+        # ----------------------------------------------------
+        # NUEVO: Selector de Cliente
+        # ----------------------------------------------------
+        customer_layout = QHBoxLayout()
+        cust_label = QLabel("👤 Cliente:")
+        cust_label.setFont(QFont("Segoe UI", 9, QFont.Bold))
+        cust_label.setStyleSheet("border: none; color: #111111;")
+        
+        self.customer_combo = QComboBox()
+        self.customer_combo.setFixedHeight(36)
+        self.customer_combo.setEditable(True)  # <-- Habilita poder escribir para buscar
+        self.customer_combo.setInsertPolicy(QComboBox.NoInsert) # Evita agregar texto libre como opción nueva
+        
+        # Configurar que la búsqueda filtre mientras escribes (coincidencia parcial)
+        completer = self.customer_combo.completer()
+        if completer:
+            completer.setFilterMode(Qt.MatchContains)
+            completer.setCaseSensitivity(Qt.CaseInsensitive)
+
+        # Estilo corregido para el campo y para el menú que se despliega
+        self.customer_combo.setStyleSheet(f"""
+            QComboBox {{
+                background-color: #FFFFFF;
+                border: 1px solid {COLORS.get('border', '#CBD5E1')};
+                border-radius: 6px;
+                padding: 0 8px;
+                color: #111111;
+            }}
+            QComboBox:focus {{ border: 2px solid #2563EB; }}
+            QComboBox QAbstractItemView {{
+                background-color: #FFFFFF;
+                color: #111111;
+                selection-background-color: #2563EB;
+                selection-color: #FFFFFF;
+                border: 1px solid #CBD5E1;
+            }}
+        """)
+        
+        customer_layout.addWidget(cust_label)
+        customer_layout.addWidget(self.customer_combo, stretch=1)
+        cart_layout.addLayout(customer_layout)
+        # ----------------------------------------------------
 
         self.cart_table = QTableWidget(0, 4)
         self.cart_table.setHorizontalHeaderLabels(["Producto", "Cant", "Subtotal", "Acciones"])
@@ -279,7 +324,6 @@ class SalesPosView(QWidget):
             }
             QPushButton:hover { background-color: #15803D; }
         """)
-        # <-- CONEXIÓN AGREGADA -->
         process_btn.clicked.connect(self._process_sale)
 
         action_btn_box.addWidget(clear_btn)
@@ -331,6 +375,29 @@ class SalesPosView(QWidget):
         for i, (product, cat_name) in enumerate(filtered):
             card = self._create_card(product, cat_name)
             self.products_grid.addWidget(card, i // cols, i % cols)
+
+
+    def _load_customers(self):
+        """Carga los clientes en el desplegable usando CustomerService."""
+        self.customer_combo.clear()
+
+        try:
+            from services.customer_service import CustomerService
+            customer_service = CustomerService(self.session)
+            customers = customer_service.get_all(only_active=True)
+
+            if customers:
+                for customer in customers:
+                    doc = customer.id_number or "S/D"
+                    display_text = f"{customer.full_name} - Doc: {doc}"
+                    self.customer_combo.addItem(display_text, customer.id)
+            else:
+                self.customer_combo.addItem("👤 Consumidor Final", 1)
+
+        except Exception as e:
+            print(f"Error cargando clientes de la BD: {e}")
+            self.customer_combo.addItem("👤 Consumidor Final", 1)
+       
 
     def _create_card(self, product, category_name):
         card = QFrame()
@@ -475,9 +542,22 @@ class SalesPosView(QWidget):
         self.total_label.setText(f"Total: {format_price(total)}")
 
     def _process_sale(self):
-        """Procesa la venta actual y la guarda en la base de datos."""
+        """Procesa la venta guardando el cliente seleccionado, el usuario y los productos del carrito."""
         if not self.cart:
             QMessageBox.warning(self, "Carrito Vacío", "No hay productos en la lista para procesar la venta.")
+            return
+
+        # 1. Extraer el ID del cliente seleccionado desde el QComboBox
+        customer_id = self.customer_combo.currentData()
+        if not customer_id:
+            customer_id = 1  # Consumidor Final por defecto
+
+        # 2. Obtener el ID del cajero/usuario logueado
+        current_user = getattr(self.app, 'current_user', None)
+        user_id = getattr(current_user, 'id', None)
+
+        if not user_id:
+            QMessageBox.warning(self, "Error de Sesión", "No se detectó un usuario activo para registrar la venta.")
             return
 
         total_amount = sum(item['subtotal'] for item in self.cart.values())
@@ -493,57 +573,39 @@ class SalesPosView(QWidget):
             return
 
         try:
-            # 1. Intentar usar SaleService si está disponible
-            try:
-                from services.sale_service import SaleService
-                sale_service = SaleService(self.session)
-                
-                items = [
-                    {
-                        'product_id': pid,
-                        'quantity': item['qty'],
-                        'unit_price': float(item['product'].price),
-                        'subtotal': item['subtotal']
-                    }
-                    for pid, item in self.cart.items()
-                ]
-                
-                current_user_id = getattr(self.app.current_user, 'id', None)
-                sale_service.create_sale(
-                    user_id=current_user_id,
-                    items=items,
-                    total=total_amount
-                )
-            except (ImportError, AttributeError):
-                # 2. Si no existe SaleService, registrar directamente con el modelo Sale/SaleDetail
-                from database.models.sale import Sale, SaleDetail
-                
-                current_user_id = getattr(self.app.current_user, 'id', None)
-                new_sale = Sale(
-                    user_id=current_user_id,
-                    total=total_amount
-                )
-                self.session.add(new_sale)
-                self.session.flush()
+            from services.sale_service import SaleService
+            sale_service = SaleService(self.session)
 
-                for pid, item in self.cart.items():
-                    detail = SaleDetail(
-                        sale_id=new_sale.id,
-                        product_id=pid,
-                        quantity=item['qty'],
-                        unit_price=float(item['product'].price),
-                        subtotal=item['subtotal']
-                    )
-                    self.session.add(detail)
-                    
-                    # Descontar stock si el modelo Product tiene el atributo stock
-                    product = item['product']
-                    if hasattr(product, 'stock') and product.stock is not None:
-                        product.stock -= item['qty']
+            # Estructurar la lista de items requerida por SaleService
+            items = [
+                {
+                    "product_id": pid,
+                    "quantity": item['qty']
+                }
+                for pid, item in self.cart.items()
+            ]
 
-                self.session.commit()
+            # 3. Crear la venta con el customer_id recuperado
+            sale = sale_service.create_sale(
+                user_id=user_id,
+                customer_id=customer_id,
+                items=items
+            )
 
-            QMessageBox.information(self, "Venta Exitosa", "¡La venta se ha registrado correctamente!")
+            # Mostrar confirmación con el nombre del cliente seleccionado
+            client_display = self.customer_combo.currentText()
+            invoice_num = getattr(sale, 'invoice_number', f"#{sale.id}")
+            
+            QMessageBox.information(
+                self,
+                "Venta Exitosa",
+                f"¡Venta registrada con éxito!\n\n"
+                f"• Factura: {invoice_num}\n"
+                f"• Cliente: {client_display}\n"
+                f"• Total: {format_price(total_amount)}"
+            )
+
+            # Limpiar carrito y resetear la vista
             self._clear_cart()
 
         except Exception as e:
