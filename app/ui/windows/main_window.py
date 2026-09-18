@@ -9,15 +9,24 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
+
 from ui.theme import COLORS
+from ui.views.salespos_view import SalesPosView
+from ui.views.products_view import ProductsView
+from ui.views.customers_view import CustomersView
+from ui.views.sales_view import SalesView
+from ui.views.cash_register_view import CashRegisterView
+from ui.views.users_view import UsersView
+from database.models.user import UserRole
 
 
 class MainWindow(QMainWindow):
     def __init__(self, app):
         super().__init__()
         self.app = app
+        self.is_admin = (self.app.current_user.role == UserRole.ADMIN or str(self.app.current_user.role).upper() == "ADMIN")
         self.setWindowTitle("Sistema de Facturación — Carnicería")
-        self.setMinimumSize(1100, 650)
+        self.setMinimumSize(1100, 700)
         self._center_window()
         self._build_ui()
 
@@ -30,128 +39,134 @@ class MainWindow(QMainWindow):
     def _build_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
-        layout = QHBoxLayout(central)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+        
+        main_layout = QVBoxLayout(central)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
 
-        # Barra lateral
-        sidebar = self._build_sidebar()
-        layout.addWidget(sidebar)
+        navbar = self._build_navbar()
+        main_layout.addWidget(navbar)
 
-        # Área de contenido
         self.stack = QStackedWidget()
         self.stack.setStyleSheet(f"background-color: {COLORS['secondary']};")
-        layout.addWidget(self.stack)
+        main_layout.addWidget(self.stack)
 
-        # Páginas vacías por ahora (se llenan en siguiente fase)
         self.pages = {}
-        modules = [
-            "Dashboard", "Ventas", "Productos",
-            "Clientes", "Caja", "Reportes"
-        ]
-        from ui.views.products_view import ProductsView
-        from ui.views.customers_view import CustomersView
-        from ui.views.sales_view import SalesView
+        modules = ["Vender (POS)", "Historial Ventas", "Productos", "Clientes", "Caja"]
+        
+        if self.is_admin:
+            modules.append("Usuarios")
+        
+        modules.append("Reportes")
 
         for name in modules:
-            if name == "Productos":
+            if name == "Vender (POS)":
+                page = SalesPosView(self)  # <-- Corregido: se pasa 'self' (la ventana principal)
+            elif name == "Historial Ventas":
+                page = SalesView(self.app)
+            elif name == "Productos":
                 page = ProductsView(self.app)
             elif name == "Clientes":
                 page = CustomersView(self.app)
-            elif name == "Ventas":
-                page = SalesView(self.app)
+            elif name == "Caja":
+                page = CashRegisterView(
+                    session=self.app.session,
+                    current_user_id=self.app.current_user.id
+                )
+            elif name == "Usuarios":
+                page = UsersView(self.app)
             else:
                 page = self._placeholder_page(name)
 
             self.pages[name] = page
             self.stack.addWidget(page)
 
-        # Mostrar dashboard por defecto
-        self.stack.setCurrentWidget(self.pages["Dashboard"])
+        self.stack.setCurrentWidget(self.pages["Vender (POS)"])
 
-    def _build_sidebar(self):
-        sidebar = QFrame()
-        sidebar.setFixedWidth(220)
-        sidebar.setStyleSheet(f"""
+    def _build_navbar(self):
+        navbar = QFrame()
+        navbar.setFixedHeight(65)
+        navbar.setStyleSheet(f"""
             QFrame {{
                 background-color: {COLORS['surface']};
-                border-right: 1px solid {COLORS['border']};
+                border-bottom: 1px solid {COLORS['border']};
             }}
         """)
-        layout = QVBoxLayout(sidebar)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-
-        # Header del sidebar
-        header = QFrame()
-        header.setFixedHeight(80)
-        header.setStyleSheet(f"background-color: {COLORS['primary']}; border: none;")
-        header_layout = QVBoxLayout(header)
-        header_layout.setAlignment(Qt.AlignCenter)
+        
+        layout = QHBoxLayout(navbar)
+        layout.setContentsMargins(16, 0, 16, 0)
+        layout.setSpacing(8)
 
         app_name = QLabel("🥩 Carnicería")
-        app_name.setAlignment(Qt.AlignCenter)
         app_name.setFont(QFont("Segoe UI", 13, QFont.Bold))
-        app_name.setStyleSheet("color: white; background: transparent;")
-        header_layout.addWidget(app_name)
+        app_name.setStyleSheet(f"color: {COLORS['primary']}; border: none; margin-right: 12px;")
+        layout.addWidget(app_name)
 
-        layout.addWidget(header)
-
-        # Info del usuario
-        user = self.app.current_user
-        user_frame = QFrame()
-        user_frame.setFixedHeight(60)
-        user_frame.setStyleSheet(f"""
-            QFrame {{ background-color: {COLORS['surface_light']}; border: none; }}
-        """)
-        user_layout = QVBoxLayout(user_frame)
-        user_layout.setAlignment(Qt.AlignCenter)
-
-        user_label = QLabel(f"👤 {user.full_name}")
-        user_label.setAlignment(Qt.AlignCenter)
-        user_label.setStyleSheet(f"color: {COLORS['text_primary']}; background: transparent; font-size: 12px;")
-        role_label = QLabel(user.role.value)
-        role_label.setAlignment(Qt.AlignCenter)
-        role_label.setStyleSheet(f"color: {COLORS['primary']}; background: transparent; font-size: 11px;")
-
-        user_layout.addWidget(user_label)
-        user_layout.addWidget(role_label)
-        layout.addWidget(user_frame)
-
-        # Separador
-        layout.addSpacing(8)
-
-        # Botones de navegación
         nav_items = [
-            ("📊", "Dashboard"),
-            ("🛒", "Ventas"),
+            ("🛒", "Vender (POS)"),
+            ("📋", "Historial Ventas"),
             ("🥩", "Productos"),
             ("👥", "Clientes"),
             ("💰", "Caja"),
-            ("📈", "Reportes"),
         ]
+
+        if self.is_admin:
+            nav_items.append(("👤", "Usuarios"))
+
+        nav_items.append(("📈", "Reportes"))
 
         self.nav_buttons = {}
         for icon, name in nav_items:
-            btn = self._nav_button(icon, name)
+            btn = QPushButton(f"{icon} {name}")
+            btn.setFixedHeight(45)
+            btn.setCheckable(True)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: transparent;
+                    color: {COLORS['text_secondary']};
+                    border: none;
+                    border-bottom: 3px solid transparent;
+                    font-size: 13px;
+                    font-weight: bold;
+                    padding: 0 14px;
+                }}
+                QPushButton:hover {{
+                    background-color: {COLORS['surface_light']};
+                    color: {COLORS['text_primary']};
+                }}
+                QPushButton:checked {{
+                    color: {COLORS['primary']};
+                    border-bottom: 3px solid {COLORS['primary']};
+                    background-color: {COLORS['surface_light']};
+                }}
+            """)
+            btn.clicked.connect(lambda _, n=name: self._navigate(n))
             self.nav_buttons[name] = btn
             layout.addWidget(btn)
 
+        if "Vender (POS)" in self.nav_buttons:
+            self.nav_buttons["Vender (POS)"].setChecked(True)
+
         layout.addStretch()
 
-        # Botón cerrar sesión
-        logout_btn = QPushButton("⬅  Cerrar Sesión")
-        logout_btn.setFixedHeight(44)
+        user = self.app.current_user
+        user_label = QLabel(f"👤 {user.full_name} ({'Admin' if self.is_admin else 'Cajero'})")
+        user_label.setStyleSheet(f"color: {COLORS['text_primary']}; font-size: 12px; font-weight: bold; border: none;")
+        layout.addWidget(user_label)
+
+        logout_btn = QPushButton("⬅ Salir")
+        logout_btn.setFixedHeight(34)
+        logout_btn.setCursor(Qt.PointingHandCursor)
         logout_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: transparent;
-                color: {COLORS['text_secondary']};
-                border: none;
-                border-top: 1px solid {COLORS['border']};
-                border-radius: 0px;
-                font-size: 13px;
-                text-align: left;
-                padding-left: 20px;
+                color: {COLORS['danger']};
+                border: 1px solid {COLORS['danger']};
+                border-radius: 6px;
+                font-size: 12px;
+                font-weight: bold;
+                padding: 0 10px;
             }}
             QPushButton:hover {{
                 background-color: {COLORS['danger']};
@@ -161,34 +176,16 @@ class MainWindow(QMainWindow):
         logout_btn.clicked.connect(self._logout)
         layout.addWidget(logout_btn)
 
-        return sidebar
+        return navbar
 
-    def _nav_button(self, icon, name):
-        btn = QPushButton(f"  {icon}  {name}")
-        btn.setFixedHeight(48)
-        btn.setCheckable(True)
-        btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: transparent;
-                color: {COLORS['text_secondary']};
-                border: none;
-                border-radius: 0px;
-                font-size: 14px;
-                text-align: left;
-                padding-left: 20px;
-            }}
-            QPushButton:hover {{
-                background-color: {COLORS['surface_light']};
-                color: {COLORS['text_primary']};
-            }}
-            QPushButton:checked {{
-                background-color: {COLORS['primary']};
-                color: white;
-                border-left: 3px solid white;
-            }}
-        """)
-        btn.clicked.connect(lambda checked, n=name: self._navigate(n))
-        return btn
+    def show_products_category(self, category_name):
+        if "Productos" in self.pages:
+            self.stack.setCurrentWidget(self.pages["Productos"])
+            for btn_name, btn in self.nav_buttons.items():
+                btn.setChecked(btn_name == "Productos")
+            products_view = self.pages["Productos"]
+            if hasattr(products_view, 'filter_by_category'):
+                products_view.filter_by_category(category_name)
 
     def _navigate(self, name):
         for btn_name, btn in self.nav_buttons.items():
@@ -201,12 +198,10 @@ class MainWindow(QMainWindow):
         layout.setAlignment(Qt.AlignCenter)
 
         label = QLabel(f"{name}")
-        label.setAlignment(Qt.AlignCenter)
         label.setFont(QFont("Segoe UI", 28, QFont.Bold))
         label.setStyleSheet(f"color: {COLORS['text_secondary']};")
 
         sublabel = QLabel("Módulo en construcción")
-        sublabel.setAlignment(Qt.AlignCenter)
         sublabel.setStyleSheet(f"color: {COLORS['border']}; font-size: 14px;")
 
         layout.addWidget(label)

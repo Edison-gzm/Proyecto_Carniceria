@@ -40,7 +40,21 @@ class ProductService:
             setattr(product, key, value)
         self.session.commit()
         return product
- 
+
+    def delete(self, product_id: int) -> tuple[bool, str]:
+        product = self.session.get(Product, product_id)
+        if not product:
+            return False, "Producto no encontrado."
+
+        # Si el producto ya fue vendido en alguna factura/venta, no se permite borrarlo
+        if product.sale_items:
+            return False, "No se puede eliminar un producto con ventas asociadas. Usa la opción 'Desactivar'."
+
+        self.session.delete(product)
+        self.session.commit()
+        return True, "Producto eliminado exitosamente."
+
+    
     def toggle_active(self, product_id: int) -> bool:
         product = self.session.get(Product, product_id)
         if not product:
@@ -61,17 +75,21 @@ class ProductService:
 class CategoryService:
     def __init__(self, session: Session):
         self.session = session
- 
+
     def get_all(self, only_active: bool = True) -> list[Category]:
         q = self.session.query(Category)
         if only_active:
             q = q.filter_by(is_active=True)
         return q.order_by(Category.name).all()
- 
+
     def create(self, name: str, description: str = "") -> Category:
-        category = Category(name=name, description=description)
+        category = Category(
+            name=name,
+            description=description
+        )
         self.session.add(category)
         self.session.commit()
+        self.session.refresh(category)
         return category
  
     def update(self, category_id: int, **kwargs) -> Category | None:

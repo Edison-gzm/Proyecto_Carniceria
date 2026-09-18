@@ -1,399 +1,294 @@
 import sys
+from database.models.user import UserRole
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QLineEdit, QTableWidget, QTableWidgetItem,
-    QHeaderView, QDialog, QFormLayout, QComboBox,
-    QMessageBox, QFrame
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
+    QLineEdit, QPushButton, QTableWidget, QTableWidgetItem, 
+    QHeaderView, QComboBox, QMessageBox, QFrame, QFormLayout
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
-
-from database.session import get_session
 from services.product_service import ProductService, CategoryService
 from database.models.product import UnitType
 from ui.theme import COLORS
 
-
 def format_price(value) -> str:
     try:
         return f"${int(float(str(value))):,}".replace(",", ".")
-    except:
+    except Exception:
         return "$0"
 
 
-class ProductDialog(QDialog):
-    """Diálogo para crear y editar productos."""
-
-    def __init__(self, parent, session, product=None):
-        super().__init__(parent)
-        self.session = session
-        self.product = product
-        self.is_edit = product is not None
-        self.setWindowTitle("Editar Producto" if self.is_edit else "Nuevo Producto")
-        self.setFixedSize(400, 320)
-        self.setStyleSheet(f"background-color: {COLORS['secondary']}; color: {COLORS['text_primary']};")
-        self._build_ui()
-        if self.is_edit:
-            self._fill_data()
-
-    def _build_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setSpacing(16)
-        layout.setContentsMargins(24, 24, 24, 24)
-
-        title = QLabel("Editar Producto" if self.is_edit else "Nuevo Producto")
-        title.setFont(QFont("Segoe UI", 15, QFont.Bold))
-        title.setStyleSheet(f"color: {COLORS['primary']};")
-        layout.addWidget(title)
-
-        form = QFormLayout()
-        form.setSpacing(12)
-
-        # Nombre
-        self.name_input = QLineEdit()
-        self.name_input.setPlaceholderText("Ej: Lomo de res")
-        self.name_input.setFixedHeight(40)
-        form.addRow("Nombre:", self.name_input)
-
-        # Categoría
-        self.category_combo = QComboBox()
-        self.category_combo.setFixedHeight(40)
-        self.category_combo.setStyleSheet(f"""
-            QComboBox {{
-                background-color: {COLORS['surface']};
-                color: {COLORS['text_primary']};
-                border: 1px solid {COLORS['border']};
-                border-radius: 6px;
-                padding: 6px;
-            }}
-            QComboBox QAbstractItemView {{
-                background-color: {COLORS['surface']};
-                color: {COLORS['text_primary']};
-                selection-background-color: {COLORS['primary']};
-            }}
-        """)
-        cat_service = CategoryService(self.session)
-        self.categories = cat_service.get_all()
-        for cat in self.categories:
-            self.category_combo.addItem(cat.name, cat.id)
-        form.addRow("Categoría:", self.category_combo)
-
-        # Precio
-        self.price_input = QLineEdit()
-        self.price_input.setPlaceholderText("Ej: 15000")
-        self.price_input.setFixedHeight(40)
-        form.addRow("Precio (por kg):", self.price_input)
-
-        layout.addLayout(form)
-        layout.addStretch()
-
-        # Botones
-        btn_layout = QHBoxLayout()
-        cancel_btn = QPushButton("Cancelar")
-        cancel_btn.setFixedHeight(40)
-        cancel_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {COLORS['surface_light']};
-                color: {COLORS['text_primary']};
-                border-radius: 6px;
-            }}
-            QPushButton:hover {{
-                background-color: {COLORS['border']};
-            }}
-        """)
-        cancel_btn.clicked.connect(self.reject)
-
-        self.save_btn = QPushButton("Guardar")
-        self.save_btn.setFixedHeight(40)
-        self.save_btn.clicked.connect(self._save)
-
-        btn_layout.addWidget(cancel_btn)
-        btn_layout.addWidget(self.save_btn)
-        layout.addLayout(btn_layout)
-
-    def _fill_data(self):
-        self.name_input.setText(self.product.name)
-        self.price_input.setText(str(int(float(str(self.product.price)))))
-        for i in range(self.category_combo.count()):
-            if self.category_combo.itemData(i) == self.product.category_id:
-                self.category_combo.setCurrentIndex(i)
-                break
-
-    def _save(self):
-        name = self.name_input.text().strip()
-        price_text = self.price_input.text().strip().replace(".", "").replace(",", "")
-        category_id = self.category_combo.currentData()
-
-        if not name:
-            QMessageBox.warning(self, "Error", "El nombre es obligatorio.")
-            return
-        try:
-            price = float(price_text)
-            if price <= 0:
-                raise ValueError
-        except ValueError:
-            QMessageBox.warning(self, "Error", "Ingresa un precio válido.")
-            return
-
-        try:
-            service = ProductService(self.session)
-            if self.is_edit:
-                service.update(self.product.id, name=name, price=price, category_id=category_id)
-            else:
-                service.create(
-                    name=name, price=price,
-                    category_id=category_id,
-                    unit=UnitType.KILO
-                )
-            self.accept()
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"No se pudo guardar: {e}")
-
-
 class ProductsView(QWidget):
-    """Vista principal del módulo de productos."""
-
     def __init__(self, app):
         super().__init__()
         self.app = app
         self.session = app.session
+        self.selected_product = None
         self._build_ui()
-        self._load_products()
+        self._apply_role_permissions()
+        self._load_data()
+
+    def _is_admin(self) -> bool:
+        """Verifica si el usuario actual tiene rol de Administrador."""
+        if not hasattr(self.app, 'current_user') or not self.app.current_user:
+            return False
+        role = getattr(self.app.current_user, 'role', None)
+        return role == UserRole.ADMIN or str(role).upper() == "ADMIN"
+
+    def _apply_role_permissions(self):
+        """Oculta o deshabilita acciones no permitidas para usuarios no administradores."""
+        if not self._is_admin():
+            self.btn_delete.setVisible(False)
 
     def _build_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(32, 24, 32, 24)
-        layout.setSpacing(16)
+        main_layout = QHBoxLayout(self)
+        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setSpacing(16)
 
-        # Encabezado
-        header = QHBoxLayout()
-        title = QLabel("Productos")
-        title.setFont(QFont("Segoe UI", 22, QFont.Bold))
-        header.addWidget(title)
-        header.addStretch()
+        # TABLA DE PRODUCTOS
+        left_layout = QVBoxLayout()
+        
+        top_bar = QHBoxLayout()
+        title = QLabel("Listado de Productos")
+        title.setFont(QFont("Segoe UI", 18, QFont.Bold))
+        title.setStyleSheet("color: #111111;")
+        top_bar.addWidget(title)
+        top_bar.addStretch()
 
-        self.new_btn = QPushButton("+ Nuevo Producto")
-        self.new_btn.setFixedHeight(40)
-        self.new_btn.clicked.connect(self._open_create)
-
-        # Solo admin puede crear
-        from database.models.user import UserRole
-        if self.app.current_user.role != UserRole.ADMIN:
-            self.new_btn.setVisible(False)
-
-        header.addWidget(self.new_btn)
-        layout.addLayout(header)
-
-        # Búsqueda y filtro
-        filter_layout = QHBoxLayout()
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Buscar producto...")
-        self.search_input.setFixedHeight(38)
-        self.search_input.textChanged.connect(self._search)
-        filter_layout.addWidget(self.search_input)
-
-        self.category_filter = QComboBox()
-        self.category_filter.setFixedHeight(38)
-        self.category_filter.setFixedWidth(180)
-        self.category_filter.setStyleSheet(f"""
-            QComboBox {{
-                background-color: {COLORS['surface']};
-                color: {COLORS['text_primary']};
-                border: 1px solid {COLORS['border']};
-                border-radius: 6px;
-                padding: 6px;
-            }}
-            QComboBox QAbstractItemView {{
-                background-color: {COLORS['surface']};
-                color: {COLORS['text_primary']};
-                selection-background-color: {COLORS['primary']};
-            }}
+        self.search_input.setPlaceholderText("🔍 Buscar en el listado...")
+        self.search_input.setFixedWidth(250)
+        self.search_input.setFixedHeight(36)
+        self.search_input.setStyleSheet("""
+            QLineEdit {
+                background-color: white; color: #111111;
+                border: 1px solid #CBD5E1; border-radius: 6px; padding: 0 10px;
+            }
         """)
-        self.category_filter.addItem("Todas las categorías", None)
-        cat_service = CategoryService(self.session)
-        for cat in cat_service.get_all():
-            self.category_filter.addItem(cat.name, cat.id)
-        self.category_filter.currentIndexChanged.connect(self._load_products)
-        filter_layout.addWidget(self.category_filter)
-        layout.addLayout(filter_layout)
+        self.search_input.textChanged.connect(self._load_table)
+        top_bar.addWidget(self.search_input)
+        left_layout.addLayout(top_bar)
 
-        # Tabla
-        self.table = QTableWidget()
-        self.table.setColumnCount(5)
-        self.table.setHorizontalHeaderLabels(["ID", "Nombre", "Categoría", "Precio/kg", "Estado"])
+        self.table = QTableWidget(0, 4)
+        self.table.setHorizontalHeaderLabels(["ID", "Nombre", "Categoría", "Precio"])
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-        self.table.setColumnWidth(0, 50)
-        self.table.setColumnWidth(3, 120)
-        self.table.setColumnWidth(4, 90)
-        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.table.setAlternatingRowColors(True)
-        self.table.verticalHeader().setVisible(False)
-        self.table.setStyleSheet(f"""
-            QTableWidget {{
-                background-color: {COLORS['surface']};
-                border: 1px solid {COLORS['border']};
-                border-radius: 8px;
-                gridline-color: {COLORS['border']};
-            }}
-            QTableWidget::item {{
-                padding: 8px;
-                color: {COLORS['text_primary']};
-            }}
-            QTableWidget::item:selected {{
-                background-color: {COLORS['primary']};
-            }}
-            QHeaderView::section {{
-                background-color: {COLORS['surface_light']};
-                color: {COLORS['text_secondary']};
-                padding: 10px;
-                border: none;
-                font-weight: bold;
-            }}
-            QTableWidget::item:alternate {{
-                background-color: {COLORS['surface_light']};
+        self.table.setSelectionMode(QTableWidget.SingleSelection)
+        self.table.setStyleSheet("""
+            QTableWidget {
+                background-color: white; border: 1px solid #E2E8F0; gridline-color: #F1F5F9; color: #111111;
+            }
+            QHeaderView::section {
+                background-color: #F8FAFC; font-weight: bold; border: none; padding: 8px; color: #334155;
+            }
+        """)
+        self.table.itemSelectionChanged.connect(self._on_row_selected)
+        left_layout.addWidget(self.table)
+
+        # PANEL DE CREACIÓN / EDICIÓN
+        panel = QFrame()
+        panel.setFixedWidth(340)
+        panel.setStyleSheet(f"""
+            QFrame {{
+                background-color: {COLORS.get('surface', '#FFFFFF')};
+                border: 1px solid {COLORS.get('border', '#E2E8F0')};
+                border-radius: 10px;
             }}
         """)
-        layout.addWidget(self.table)
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(16, 16, 16, 16)
+        panel_layout.setSpacing(14)
 
-        # Botones de acción
-        action_layout = QHBoxLayout()
-        action_layout.addStretch()
+        self.panel_title = QLabel("Crear Nuevo Producto")
+        self.panel_title.setFont(QFont("Segoe UI", 14, QFont.Bold))
+        self.panel_title.setStyleSheet("border: none; color: #111111;")
+        panel_layout.addWidget(self.panel_title)
 
-        self.edit_btn = QPushButton("✏ Editar")
-        self.edit_btn.setFixedHeight(38)
-        self.edit_btn.setFixedWidth(110)
-        self.edit_btn.clicked.connect(self._open_edit)
+        form = QFormLayout()
+        form.setSpacing(12)
 
-        self.toggle_btn = QPushButton("⏸ Desactivar")
-        self.toggle_btn.setFixedHeight(38)
-        self.toggle_btn.setFixedWidth(130)
-        self.toggle_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {COLORS['warning']};
-                color: white;
-                border-radius: 6px;
-                font-weight: bold;
-            }}
-            QPushButton:hover {{
-                background-color: #d68910;
-            }}
-        """)
-        self.toggle_btn.clicked.connect(self._toggle_product)
+        INPUT_STYLE = """
+            QLineEdit, QComboBox {
+                background-color: #FFFFFF; color: #111111; font-weight: bold;
+                border: 1.5px solid #64748B; border-radius: 6px; padding: 6px;
+            }
+            QLineEdit:focus, QComboBox:focus { border: 2px solid #2563EB; }
+        """
 
-        self.delete_btn = QPushButton("🗑 Eliminar")
-        self.delete_btn.setFixedHeight(38)
-        self.delete_btn.setFixedWidth(120)
-        self.delete_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {COLORS['danger']};
-                color: white;
-                border-radius: 6px;
-                font-weight: bold;
-            }}
-            QPushButton:hover {{ background-color: #c0392b; }}
-        """)
-        self.delete_btn.clicked.connect(self._delete_product)
-        action_layout.addWidget(self.edit_btn)
-        action_layout.addWidget(self.toggle_btn)
-        action_layout.addWidget(self.delete_btn)
-        layout.addLayout(action_layout)
+        self.txt_name = QLineEdit()
+        self.txt_name.setStyleSheet(INPUT_STYLE)
+        
+        self.cmb_category = QComboBox()
+        self.cmb_category.setStyleSheet(INPUT_STYLE)
 
-    def _load_products(self):
+        self.txt_price = QLineEdit()
+        self.txt_price.setStyleSheet(INPUT_STYLE)
+
+        form.addRow("Nombre:", self.txt_name)
+        form.addRow("Categoría:", self.cmb_category)
+        form.addRow("Precio ($):", self.txt_price)
+        panel_layout.addLayout(form)
+
+        # Botones de Acción CRUD
+        self.btn_new = QPushButton("✨ Limpiar Formulario")
+        self.btn_save = QPushButton("➕ Crear Producto")
+        self.btn_delete = QPushButton("🗑️ Eliminar Seleccionado")
+
+        self.btn_new.setFixedHeight(36)
+        self.btn_save.setFixedHeight(40)
+        self.btn_delete.setFixedHeight(36)
+
+        self.btn_new.setCursor(Qt.PointingHandCursor)
+        self.btn_save.setCursor(Qt.PointingHandCursor)
+        self.btn_delete.setCursor(Qt.PointingHandCursor)
+
+        self.btn_new.setStyleSheet("background-color: #64748B; color: white; font-weight: bold; border-radius: 6px; border: none;")
+        self.btn_save.setStyleSheet("background-color: #16A34A; color: white; font-weight: bold; border-radius: 6px; border: none; font-size: 13px;")
+        self.btn_delete.setStyleSheet("background-color: #DC2626; color: white; font-weight: bold; border-radius: 6px; border: none;")
+
+        self.btn_new.clicked.connect(self._clear_form)
+        self.btn_save.clicked.connect(self._save_product)
+        self.btn_delete.clicked.connect(self._delete_product)
+
+        panel_layout.addWidget(self.btn_save)
+        panel_layout.addWidget(self.btn_new)
+        panel_layout.addWidget(self.btn_delete)
+        panel_layout.addStretch()
+
+        main_layout.addLayout(left_layout, stretch=2)
+        main_layout.addWidget(panel, stretch=1)
+
+    def _load_data(self):
+        cat_service = CategoryService(self.session)
+        self.cmb_category.clear()
+        for cat in cat_service.get_all():
+            self.cmb_category.addItem(cat.name, cat.id)
+
+        self._load_table()
+
+    def _load_table(self):
+        self.table.setRowCount(0)
         self.session.expire_all()
-        service = ProductService(self.session)
-        category_id = self.category_filter.currentData()
-        if category_id:
-            products = service.get_by_category(category_id)
+        prod_service = ProductService(self.session)
+        products = prod_service.get_all(only_active=True)
+
+        query = self.search_input.text().lower().strip()
+
+        for prod in products:
+            if query and query not in prod.name.lower():
+                continue
+
+            row = self.table.rowCount()
+            self.table.insertRow(row)
+            self.table.setItem(row, 0, QTableWidgetItem(str(prod.id)))
+            self.table.setItem(row, 1, QTableWidgetItem(prod.name))
+            
+            cat_name = prod.category.name if prod.category else "Sin Categoría"
+            self.table.setItem(row, 2, QTableWidgetItem(cat_name))
+            self.table.setItem(row, 3, QTableWidgetItem(format_price(prod.price)))
+
+    def _on_row_selected(self):
+        # Si NO es admin, no se permite cargar el producto para edición o eliminación
+        if not self._is_admin():
+            self.selected_product = None
+            self.panel_title.setText("Crear Nuevo Producto")
+            self.btn_save.setText("➕ Crear Producto")
+            self.btn_save.setEnabled(True)
+            return
+
+        selected_items = self.table.selectedItems()
+        if not selected_items:
+            return
+
+        row = selected_items[0].row()
+        prod_id = int(self.table.item(row, 0).text())
+
+        prod_service = ProductService(self.session)
+        self.selected_product = prod_service.get_by_id(prod_id)
+
+        if self.selected_product:
+            self.txt_name.setText(self.selected_product.name)
+            self.txt_price.setText(str(int(float(str(self.selected_product.price)))))
+
+            for i in range(self.cmb_category.count()):
+                if self.cmb_category.itemData(i) == self.selected_product.category_id:
+                    self.cmb_category.setCurrentIndex(i)
+                    break
+
+            self.panel_title.setText("Editar Producto")
+            self.btn_save.setText("💾 Actualizar Producto")
+            self.btn_save.setEnabled(True)
+            self.btn_delete.setEnabled(True)
+
+    def _clear_form(self):
+        self.selected_product = None
+        self.panel_title.setText("Crear Nuevo Producto")
+        self.btn_save.setText("➕ Crear Producto")
+        self.btn_save.setEnabled(True)
+        
+        if self._is_admin():
+            self.btn_delete.setVisible(True)
+            self.btn_delete.setEnabled(True)
         else:
-            products = service.get_all(only_active=False)
-        self._populate_table(products)
+            self.btn_delete.setVisible(False)
 
-    def _search(self, text):
-        if not text.strip():
-            self._load_products()
+        self.txt_name.clear()
+        self.txt_price.clear()
+        self.table.clearSelection()
+
+    def _save_product(self):
+        name = self.txt_name.text().strip()
+        price_text = self.txt_price.text().strip().replace(".", "").replace(",", "")
+        category_id = self.cmb_category.currentData()
+
+        if not name or not price_text:
+            QMessageBox.warning(self, "Atención", "Por favor completa todos los campos.")
             return
-        service = ProductService(self.session)
-        products = service.search(text)
-        self._populate_table(products)
 
-    def _populate_table(self, products):
-        self.table.setRowCount(len(products))
-        for row, p in enumerate(products):
-            self.table.setItem(row, 0, QTableWidgetItem(str(p.id)))
-            self.table.setItem(row, 1, QTableWidgetItem(p.name))
-            self.table.setItem(row, 2, QTableWidgetItem(p.category.name if p.category else ""))
-            self.table.setItem(row, 3, QTableWidgetItem(format_price(p.price)))
+        try:
+            price = float(price_text)
+        except ValueError:
+            QMessageBox.warning(self, "Error", "Ingresa un precio numérico válido.")
+            return
 
-            estado = QTableWidgetItem("Activo" if p.is_active else "Inactivo")
-            estado.setForeground(
-                Qt.green if p.is_active else Qt.red
+        prod_service = ProductService(self.session)
+
+        # Si hay producto seleccionado Y es admin, se actualiza; de lo contrario, SIEMPRE se crea
+        if self.selected_product and self._is_admin():
+            prod_service.update(self.selected_product.id, name=name, price=price, category_id=category_id)
+            QMessageBox.information(self, "Éxito", "Producto actualizado correctamente.")
+        else:
+            prod_service.create(
+                name=name, price=price, category_id=category_id, 
+                unit=UnitType.KILO
             )
-            self.table.setItem(row, 4, estado)
-            self.table.item(row, 0).setData(Qt.UserRole, p.id)
+            QMessageBox.information(self, "Éxito", "Producto creado exitosamente.")
 
-    def _get_selected_product_id(self):
-        row = self.table.currentRow()
-        if row < 0:
-            QMessageBox.warning(self, "Aviso", "Selecciona un producto primero.")
-            return None
-        return self.table.item(row, 0).data(Qt.UserRole)
-
-    def _open_create(self):
-        dialog = ProductDialog(self, self.session)
-        if dialog.exec():
-            self._load_products()
-
-    def _open_edit(self):
-        product_id = self._get_selected_product_id()
-        if not product_id:
-            return
-        service = ProductService(self.session)
-        product = service.get_by_id(product_id)
-        dialog = ProductDialog(self, self.session, product)
-        if dialog.exec():
-            self._load_products()
-
-    def _toggle_product(self):
-        product_id = self._get_selected_product_id()
-        if not product_id:
-            return
-        service = ProductService(self.session)
-        product = service.get_by_id(product_id)
-        action = "desactivar" if product.is_active else "activar"
-
-        reply = QMessageBox.question(
-            self, "Confirmar",
-            f"¿Seguro que quieres {action} '{product.name}'?",
-            QMessageBox.Yes | QMessageBox.No
-        )
-        if reply == QMessageBox.Yes:
-            service.toggle_active(product_id)
-            self._load_products()
+        self._clear_form()
+        self._load_table()  
 
     def _delete_product(self):
-        product_id = self._get_selected_product_id()
-        if not product_id:
+        if not self._is_admin():
+            QMessageBox.warning(self, "Acceso Denegado", "Solo los administradores pueden eliminar productos.")
             return
-        service = ProductService(self.session)
-        product = service.get_by_id(product_id)
-        reply = QMessageBox.warning(
-            self, "Eliminar producto",
-            f"¿Eliminar permanentemente '{product.name}'?\nEsta acción no se puede deshacer.",
+
+        if not self.selected_product:
+            QMessageBox.warning(self, "Atención", "Selecciona primero un producto de la tabla para eliminar.")
+            return
+
+        reply = QMessageBox.question(
+            self, "Confirmar eliminación",
+            f"¿Estás seguro de que deseas eliminar el producto '{self.selected_product.name}'?",
             QMessageBox.Yes | QMessageBox.No
         )
+
         if reply == QMessageBox.Yes:
-            try:
-                self.session.delete(product)
-                self.session.commit()
-                self._load_products()
-            except Exception as e:
-                self.session.rollback()
-                QMessageBox.critical(
-                    self, "Error",
-                    f"No se pudo eliminar: {e}\n\nSi el producto tiene ventas asociadas, desactívalo en lugar de eliminarlo."
-                )
+            prod_service = ProductService(self.session)
+            success, message = prod_service.delete(self.selected_product.id)
+
+            if success:
+                self._clear_form()
+                self._load_table()
+            else:
+                QMessageBox.warning(self, "No se puede eliminar", message)

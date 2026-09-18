@@ -54,3 +54,38 @@ class CashRegisterService:
             .limit(limit)
             .all()
         )
+    def get_current_sales_total(self, register_id: int) -> Decimal:
+        """Obtiene el total acumulado de ventas de la caja actual sin cerrarla."""
+        sales = self.session.query(Sale).filter(
+            Sale.cash_register_id == register_id,
+            Sale.status == SaleStatus.CLOSED
+        ).all()
+        return Decimal(str(sum(s.total for s in sales)))    
+
+    def get_register_report_details(self, register_id: int) -> dict:
+        """Obtiene el extracto detallado de las ventas del turno de caja hasta su cierre."""
+        register = self.session.get(CashRegister, register_id)
+        if not register:
+            raise ValueError("Caja no encontrada")
+
+        # Trae todas las ventas cerradas asociadas exclusivamente a este turno de caja
+        sales = self.session.query(Sale).filter(
+            Sale.cash_register_id == register_id,
+            Sale.status == SaleStatus.CLOSED
+        ).all()
+
+        total_sales = sum(s.total for s in sales)
+
+        return {
+            "register_id": register.id,
+            "opened_at": register.opened_at,
+            "closed_at": register.closed_at,
+            "opening_amount": register.opening_amount,
+            "closing_amount": register.closing_amount or Decimal("0"),
+            "total_sales": Decimal(str(total_sales)),
+            "difference": register.difference or Decimal("0"),
+            "status": register.status,
+            "notes": register.notes,
+            "sales_count": len(sales),
+            "sales": sales  # Extracto de ventas del día/turno específico
+        }
