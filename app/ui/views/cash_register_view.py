@@ -1,32 +1,23 @@
 from datetime import datetime
+from decimal import Decimal
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-    QLineEdit, QPushButton, QTableWidget, QTableWidgetItem,
+    QPushButton, QTableWidget, QTableWidgetItem,
     QHeaderView, QMessageBox, QGroupBox
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
-from sqlalchemy import func
 
 from ui.theme import COLORS
 from database.models import CashRegister, Sale
+from services.cash_register_service import CashRegisterService
 
 
 def _get_model_field(obj, *field_names, default=None):
-    """Obtiene el valor del primer campo disponible en el objeto."""
     for field in field_names:
         if hasattr(obj, field) and getattr(obj, field) is not None:
             return getattr(obj, field)
     return default
-
-
-def _set_model_field(obj, field_names, value):
-    """Asigna un valor al primer campo de la lista que exista en el objeto."""
-    for field in field_names:
-        if hasattr(obj, field):
-            setattr(obj, field, value)
-            return True
-    return False
 
 
 class CashRegisterView(QWidget):
@@ -35,6 +26,7 @@ class CashRegisterView(QWidget):
         self.session = session
         self.current_user_id = current_user_id
         self.active_register = None
+        self.cash_service = CashRegisterService(session)
 
         self._build_ui()
         self.refresh_data()
@@ -44,7 +36,6 @@ class CashRegisterView(QWidget):
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(15)
 
-        # Título principal
         title = QLabel("Gestión y Arqueo de Caja")
         title.setFont(QFont("Segoe UI", 18, QFont.Bold))
         title.setStyleSheet(f"color: {COLORS['text_primary']};")
@@ -73,53 +64,42 @@ class CashRegisterView(QWidget):
         status_layout = QVBoxLayout(self.box_status)
         status_layout.setSpacing(12)
 
-        # Información de Apertura
         self.lbl_info = QLabel("Estado: Cargando...")
         self.lbl_info.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 13px;")
         status_layout.addWidget(self.lbl_info)
 
-        # Totales
-        self.lbl_totals = QLabel("Monto Inicial: $0.00  |  Ventas Turno: $0.00  |  Total Esperado: $0.00")
-        self.lbl_totals.setFont(QFont("Segoe UI", 11, QFont.Bold))
-        self.lbl_totals.setStyleSheet(f"color: {COLORS['primary']};")
+        # Recuadro simplificado solo con Ventas Totales del Turno
+        self.lbl_totals = QLabel("Total Ventas del Turno: $0.00")
+        self.lbl_totals.setFont(QFont("Segoe UI", 13, QFont.Bold))
+        self.lbl_totals.setStyleSheet(f"""
+            color: {COLORS['primary']}; 
+            background-color: {COLORS['surface_light']}; 
+            padding: 12px; 
+            border-radius: 6px;
+            border: 1px solid {COLORS['border']};
+        """)
         status_layout.addWidget(self.lbl_totals)
 
-        # Entrada Monto Físico
-        form_layout = QHBoxLayout()
-        form_layout.addWidget(QLabel("Monto Físico Contado en Caja ($):"))
-        self.input_physical_amount = QLineEdit()
-        self.input_physical_amount.setPlaceholderText("0.00")
-        self.input_physical_amount.setStyleSheet(f"""
-            QLineEdit {{
-                border: 1px solid {COLORS['border']};
-                border-radius: 4px;
-                padding: 6px 10px;
-                font-size: 13px;
-                background-color: {COLORS['surface_light']};
+        # Botones de Acción (Traer y Cerrar Caja)
+        buttons_layout = QHBoxLayout()
+        
+        self.btn_fetch = QPushButton("🔄 Traer / Actualizar Datos")
+        self.btn_fetch.setFixedHeight(40)
+        self.btn_fetch.setCursor(Qt.PointingHandCursor)
+        self.btn_fetch.setFont(QFont("Segoe UI", 11, QFont.Bold))
+        self.btn_fetch.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLORS['primary']};
+                color: white;
+                border: none;
+                border-radius: 6px;
             }}
+            QPushButton:hover {{ background-color: #1d4ed8; }}
         """)
-        form_layout.addWidget(self.input_physical_amount)
-        status_layout.addLayout(form_layout)
+        self.btn_fetch.clicked.connect(self.refresh_data)
+        buttons_layout.addWidget(self.btn_fetch)
 
-        # Observaciones
-        obs_layout = QHBoxLayout()
-        obs_layout.addWidget(QLabel("Notas / Observaciones:"))
-        self.input_notes = QLineEdit()
-        self.input_notes.setPlaceholderText("Ej. Arqueo correcto / Retiro de dinero...")
-        self.input_notes.setStyleSheet(f"""
-            QLineEdit {{
-                border: 1px solid {COLORS['border']};
-                border-radius: 4px;
-                padding: 6px 10px;
-                font-size: 13px;
-                background-color: {COLORS['surface_light']};
-            }}
-        """)
-        obs_layout.addWidget(self.input_notes)
-        status_layout.addLayout(obs_layout)
-
-        # Botón Acción
-        self.btn_action = QPushButton("Realizar Arqueo y Cerrar Caja")
+        self.btn_action = QPushButton("Realizar Cierre de Caja")
         self.btn_action.setFixedHeight(40)
         self.btn_action.setCursor(Qt.PointingHandCursor)
         self.btn_action.setFont(QFont("Segoe UI", 11, QFont.Bold))
@@ -130,17 +110,16 @@ class CashRegisterView(QWidget):
                 border: none;
                 border-radius: 6px;
             }}
-            QPushButton:hover {{
-                background-color: #c82333;
-            }}
+            QPushButton:hover {{ background-color: #c82333; }}
         """)
         self.btn_action.clicked.connect(self._handle_cash_action)
-        status_layout.addWidget(self.btn_action)
+        buttons_layout.addWidget(self.btn_action)
 
+        status_layout.addLayout(buttons_layout)
         layout.addWidget(self.box_status)
 
-        # --- SECCIÓN: VENTAS DEL TURNO ACTIVO ---
-        sales_group = QGroupBox("Ventas del Turno / Día")
+        # --- SECCIÓN: VENTAS DEL TURNO ACTUAL ---
+        sales_group = QGroupBox("Corte de Caja / Detalle de Ventas del Turno")
         sales_group.setStyleSheet(self.box_status.styleSheet())
         
         sales_layout = QVBoxLayout(sales_group)
@@ -168,67 +147,53 @@ class CashRegisterView(QWidget):
         layout.addWidget(sales_group)
 
     def refresh_data(self):
-        """Refresca el estado de la caja y carga las ventas del turno."""
-        # 1. Buscar si hay una caja abierta
-        self.active_register = (
-            self.session.query(CashRegister)
-            .filter(CashRegister.status == "OPEN")
-            .order_by(CashRegister.id.desc())
-            .first()
-        )
+        """Refresca y trae los datos actuales del turno. Si está cerrada, la abre automáticamente."""
+        self.active_register = self.cash_service.get_open()
+
+        # SEGURIDAD AUTOMÁTICA: Si no hay caja abierta, la abre de inmediato de forma transparente
+        if not self.active_register:
+            try:
+                self.cash_service.open_register(user_id=self.current_user_id, opening_amount=0.0)
+                self.active_register = self.cash_service.get_open()
+            except Exception:
+                pass
 
         if not self.active_register:
             self._ui_state_no_register()
             return
 
-        # 2. Obtener fecha de apertura y monto inicial
         opened_at = _get_model_field(self.active_register, "opened_at", "opening_date", "created_at")
-        initial_amount = _get_model_field(self.active_register, "opening_amount", "initial_amount", "initial_balance", default=0.0)
 
-        # 3. Consultar las ventas asociadas a esta caja o por fecha de apertura
+        # Consultar ventas del turno activo
         sales_query = self.session.query(Sale)
-        
         if hasattr(Sale, 'cash_register_id'):
             sales_query = sales_query.filter(Sale.cash_register_id == self.active_register.id)
         elif opened_at:
             sales_query = sales_query.filter(Sale.created_at >= opened_at)
 
-        # Corrección: Filtrar por estado CLOSED en lugar de COMPLETED
         if hasattr(Sale, 'status'):
             sales_query = sales_query.filter(Sale.status == 'CLOSED')
 
-        total_sales = sales_query.with_entities(func.sum(Sale.total)).scalar() or 0.0
-        expected_total = float(initial_amount) + float(total_sales)
+        sales_list = sales_query.all()
+        total_sales = float(sum(s.total for s in sales_list))
 
-        # 4. Actualizar etiquetas
+        # Mostrar la información del turno en curso
         opened_str = opened_at.strftime("%d/%m/%Y %H:%M:%S") if opened_at else "N/A"
-        self.lbl_info.setText(f"Abierta por: Usuario #{self.active_register.user_id}  |  Hora Apertura (Local PC): {opened_str}")
-        self.lbl_totals.setText(
-            f"Monto Inicial: ${initial_amount:,.2f}  |  "
-            f"Ventas Turno: ${total_sales:,.2f}  |  "
-            f"Total Esperado: ${expected_total:,.2f}"
-        )
+        self.lbl_info.setText(f"Abierta por: Usuario #{self.active_register.user_id}  |  Hora Apertura: {opened_str}")
+        self.lbl_totals.setText(f"Total Ventas del Turno: ${total_sales:,.2f}")
 
-        self.btn_action.setText("Realizar Arqueo y Cerrar Caja")
+        self.btn_action.setEnabled(True)
+        self.btn_action.setText("🔒 Realizar Cierre de Caja")
         self.btn_action.setStyleSheet(f"background-color: {COLORS['danger']}; color: white; border-radius: 6px;")
-        self.input_physical_amount.setEnabled(True)
-        self.input_notes.setEnabled(True)
 
-        # 5. Cargar tabla de ventas del turno
-        self._load_turn_sales(sales_query.all())
+        self._load_turn_sales(sales_list)
 
     def _ui_state_no_register(self):
-        """Estado cuando la caja está cerrada."""
-        self.lbl_info.setText("Caja Actualmente CERRADA. Inicie un nuevo turno.")
-        self.lbl_totals.setText("Monto Inicial: $0.00  |  Ventas Turno: $0.00  |  Total Esperado: $0.00")
-        self.btn_action.setText("🔓 Abrir Nueva Caja / Turno")
-        self.btn_action.setStyleSheet(f"background-color: {COLORS['success']}; color: white; border-radius: 6px;")
-        self.input_physical_amount.setEnabled(False)
-        self.input_notes.setEnabled(False)
+        self.lbl_info.setText("Caja en proceso de inicialización automática...")
+        self.lbl_totals.setText("Total Ventas del Turno: $0.00")
         self.table_sales.setRowCount(0)
 
     def _load_turn_sales(self, sales_list):
-        """Carga el detalle de las ventas en la tabla."""
         self.table_sales.setRowCount(0)
 
         for row, sale in enumerate(sales_list):
@@ -261,68 +226,48 @@ class CashRegisterView(QWidget):
             self.table_sales.setItem(row, 4, item_total)
 
     def _handle_cash_action(self):
-        if not self.active_register:
-            self._open_register()
-        else:
-            self._close_register()
-
-    def _open_register(self):
-        now_local = datetime.now()
-        cols = [c.key for c in CashRegister.__table__.columns]
-        
-        kwargs = {
-            "user_id": self.current_user_id,
-            "status": "OPEN"
-        }
-
-        if "opened_at" in cols:
-            kwargs["opened_at"] = now_local
-        elif "opening_date" in cols:
-            kwargs["opening_date"] = now_local
-
-        for col_name in ["opening_amount", "initial_amount", "initial_balance", "opening_balance"]:
-            if col_name in cols:
-                kwargs[col_name] = 0.0
-                break
-
-        new_reg = CashRegister(**kwargs)
-        self.session.add(new_reg)
-        self.session.commit()
-
-        QMessageBox.information(self, "Caja Abierta", f"Se ha abierto la caja con éxito a las {now_local.strftime('%H:%M:%S')}.")
-        self.refresh_data()
+        # Al presionar el botón de cierre, ejecutamos directamente el cierre y apertura automática
+        self._close_register()
 
     def _close_register(self):
-        physical_text = self.input_physical_amount.text().strip()
-        if not physical_text:
-            QMessageBox.warning(self, "Atención", "Por favor ingrese el monto físico contado en caja.")
-            return
-
-        try:
-            physical_amount = float(physical_text)
-        except ValueError:
-            QMessageBox.warning(self, "Atención", "El monto físico debe ser un número válido.")
+        if not self.active_register:
+            self.refresh_data()
             return
 
         reply = QMessageBox.question(
             self,
             "Confirmar Cierre de Caja",
-            "¿Está seguro de que desea realizar el arqueo y cerrar el turno?",
+            "¿Desea realizar el corte y cierre del turno actual? Se guardarán las ventas y se abrirá un nuevo turno de inmediato.",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No
         )
 
         if reply == QMessageBox.Yes:
-            now_local = datetime.now()
+            try:
+                # 1. Obtenemos las ventas del turno actual para calcular el cierre
+                sales_query = self.session.query(Sale).filter(Sale.cash_register_id == self.active_register.id)
+                if hasattr(Sale, 'status'):
+                    sales_query = sales_query.filter(Sale.status == 'CLOSED')
+                total_sales = float(sum(s.total for s in sales_query.all()))
 
-            _set_model_field(self.active_register, ["closed_at", "closing_date"], now_local)
-            _set_model_field(self.active_register, ["closing_amount", "final_amount", "closing_balance"], physical_amount)
-            _set_model_field(self.active_register, ["notes", "observations"], self.input_notes.text().strip())
-            self.active_register.status = "CLOSED"
+                # 2. Cerramos la caja actual con el total acumulado
+                self.cash_service.close_register(
+                    register_id=self.active_register.id,
+                    closing_amount=total_sales,
+                    notes="Corte y cierre automático por sistema"
+                )
 
-            self.session.commit()
-            QMessageBox.information(self, "Caja Cerrada", "El arqueo de caja se ha realizado exitosamente.")
-            
-            self.input_physical_amount.clear()
-            self.input_notes.clear()
-            self.refresh_data()
+                # 3. ¡Abrimos inmediatamente el nuevo turno de forma automática!
+                self.cash_service.open_register(user_id=self.current_user_id, opening_amount=0.0)
+
+                QMessageBox.information(
+                    self, 
+                    "Corte Exitoso", 
+                    "El turno se ha cerrado y se ha iniciado una nueva caja de manera automática."
+                )
+                
+                # 4. Refrescamos los datos para mostrar el nuevo turno limpio en pantalla
+                self.refresh_data()
+
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"No se pudo completar el proceso de cierre y apertura: {str(e)}")

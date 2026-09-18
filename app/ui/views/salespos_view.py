@@ -574,7 +574,14 @@ class SalesPosView(QWidget):
 
         try:
             from services.sale_service import SaleService
+            from services.cash_register_service import CashRegisterService
+            
             sale_service = SaleService(self.session)
+            cash_service = CashRegisterService(self.session)
+            
+            # Obtener la caja abierta actual
+            open_register = cash_service.get_open()
+            register_id = open_register.id if open_register else None
 
             # Estructurar la lista de items requerida por SaleService
             items = [
@@ -585,11 +592,12 @@ class SalesPosView(QWidget):
                 for pid, item in self.cart.items()
             ]
 
-            # 3. Crear la venta con el customer_id recuperado
+            # Crear la venta pasando el cash_register_id correctamente
             sale = sale_service.create_sale(
                 user_id=user_id,
                 customer_id=customer_id,
-                items=items
+                items=items,
+                cash_register_id=register_id
             )
 
             # Mostrar confirmación con el nombre del cliente seleccionado
